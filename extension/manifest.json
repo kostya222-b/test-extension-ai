@@ -1,0 +1,61 @@
+{
+  "manifest_version": 3,
+  "name": "Помощник для тестов",
+  "version": "3.4.0",
+  "description": "Расширение для прохождения тестов с умной навигацией, ИИ и общей базой ответов",
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "Нажмите для управления"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs",
+    "downloads",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "*://*.edu.rosminzdrav.ru/*",
+    "*://edu.rosminzdrav.ru/*",
+    "*://*.supabase.co/*",
+    "*://api.mistral.ai/*",
+    "*://new-8peq.onrender.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.edu.rosminzdrav.ru/*",
+        "*://edu.rosminzdrav.ru/*"
+      ],
+      "js": [
+        "contentScript/supabase-config.js",
+        "contentScript/utils.js",
+        "contentScript/modal.js",
+        "contentScript/api.js",
+        "contentScript/handlers.js",
+        "contentScript/main.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*.png"],
+      "matches": ["*://*.edu.rosminzdrav.ru/*"]
+    }
+  ]
+}

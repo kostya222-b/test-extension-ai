@@ -1,0 +1,460 @@
+// =====================================================================
+// === API.JS — РАБОТА С AI (Mistral) И RENDER СЕРВЕРОМ ===
+// =====================================================================
+
+// Извлечение текста из кавычек (для ИИ)
+window.extractQuotedText = function(text) {
+    const regex = /"([^"]*)"/g;
+    const matches = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        matches.push(match[1]);
+    }
+    return matches;
+};
+
+// ✅ Генерация всех возможных комбинаций
+window.generateAllCombinations = function(options) {
+    const allCombinations = [];
+    
+    // Одиночные ответы
+    for (const opt of options) {
+        allCombinations.push([opt]);
+    }
+    
+    // Пары
+    for (let i = 0; i < options.length; i++) {
+        for (let j = i + 1; j < options.length; j++) {
+            allCombinations.push([options[i], options[j]]);
+        }
+    }
+    
+    // Тройки (если вариантов >= 3)
+    if (options.length >= 3) {
+        for (let i = 0; i < options.length; i++) {
+            for (let j = i + 1; j < options.length; j++) {
+                for (let k = j + 1; k < options.length; k++) {
+                    allCombinations.push([options[i], options[j], options[k]]);
+                }
+            }
+        }
+    }
+    
+    // Все четыре (если вариантов >= 4)
+    if (options.length >= 4) {
+        allCombinations.push([...options]);
+    }
+    
+    return allCombinations;
+};
+
+// ✅ Поиск свободной комбинации
+window.findFreeCombination = function(options, incorrectCombinations) {
+    const allCombinations = window.generateAllCombinations(options);
+    
+    // Нормализуем запрещённые комбинации для сравнения
+    const forbiddenSets = incorrectCombinations.map(comb => 
+        comb.map(ans => window.normalizeText(ans)).sort().join('|')
+    );
+    
+    // Ищем комбинации, которых нет в запретах
+    const freeCombinations = allCombinations.filter(comb => {
+        const normalizedComb = comb.map(ans => window.normalizeText(ans)).sort().join('|');
+        return !forbiddenSets.includes(normalizedComb);
+    });
+    
+    window.sendLogToBackground(`🔢 Всего комбинаций: ${allCombinations.length}, Запрещено: ${forbiddenSets.length}, Свободно: ${freeCombinations.length}`);
+    
+    if (freeCombinations.length > 0) {
+        const randomIndex = Math.floor(Math.random() * freeCombinations.length);
+        window.sendLogToBackground(`🎲 Выбрана комбинация #${randomIndex + 1} из свободных`);
+        return freeCombinations[randomIndex];
+    }
+    
+    return [];
+};
+
+// ✅ ЗАПРОС К ИИ С РЕЗЕРВНЫМ ПЛАНОМ
+window.askAIWithIncorrectCombinations = async function(question, options, isMultipleChoice, incorrectCombinations = []) {
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 1500;
+    let systemMessage;
+    let userMessageBase;
+    
+    // 🎯 Формируем список вариантов с чётким форматом
+    const optionsList = options.map((opt, index) => `[${index + 1}] ${opt}`).join('\n');
+    
+    // 🧠 Системный промт — максимально строгий
+    systemMessage = `Ты — медицинский эксперт-экзаменатор. Твоя ЕДИНСТВЕННАЯ задача: выбрать правильные варианты ответов ИЗ ПРЕДЛОЖЕННОГО СПИСКА.
+🔒 КРИТИЧЕСКИЕ ПРАВИЛА (нарушение = ошибка):
+ОТВЕЧАЙ ТОЛЬКО полным текстом вариантов КАК ОНИ НАПИСАНЫ в списке. Дословно.
+⛔ ЗАПРЕЩЕНО возвращать "вариант 1", "вариант 2", "[1]", "[2]" или любые номера/метки.
+⛔ ЗАПРЕЩЕНО сокращать, изменять или перефразировать текст вариантов.
+Формат ответа: ТОЛЬКО валидный JSON-массив строк. БЕЗ пояснений.
+Копируй текст варианта ТОЧЬ-В-ТОЧЬ как в списке, включая все слова, пунктуацию и регистр.
+❌ НЕПРАВИЛЬНО (так НЕЛЬЗЯ):
+["вариант 2", "вариант 4"]
+["[2]", "[4]"]
+["ответ 2", "ответ 4"]
+✅ ПРАВИЛЬНО (так НУЖНО):
+["появление крупного (диаметром 5–10 см) очень болезненного узла", "формирование глубокого некроза"]
+Если нарушишь эти правила — ответ будет отклонён.`;
+
+    userMessageBase = `ВОПРОС: ${question}
+📋 ДОСТУПНЫЕ ВАРИАНТЫ (выбирай СТРОГО из этого списка, копируй текст ПОЛНОСТЬЮ):
+${optionsList}
+🎯 ТИП ВОПРОСА: ${isMultipleChoice ? 'НЕСКОЛЬКО правильных ответов' : 'ОДИН правильный ответ'}`;
+    
+    // ⛔ Блок запретов
+    let exclusionBlock = "";
+    if (incorrectCombinations.length > 0) {
+        exclusionBlock = "\n\n⛔ ЗАПРЕЩЁННЫЕ КОМБИНАЦИИ (уже проверены и НЕВЕРНЫ):";
+        const limitedCombos = incorrectCombinations.slice(0, 10);
+        limitedCombos.forEach((comb, idx) => {
+            exclusionBlock += `\n${idx + 1}. [${comb.join(', ')}]`;
+        });
+        exclusionBlock += `\n\n❗ ТЫ НЕ ДОЛЖЕН предлагать ни одну из вышеперечисленных комбинаций. Найди ДРУГУЮ комбинацию.`;
+    }
+    
+    userMessageBase += exclusionBlock;
+    userMessageBase += `\n\n✅ ПРИМЕР ПРАВИЛЬНОГО ОТВЕТА (полный текст вариантов, НЕ номера):
+${isMultipleChoice ? '["полный текст варианта 1", "полный текст варианта 3"]' : '["полный текст правильного варианта"]'}
+📤 ОТВЕТЬ ТОЛЬКО JSON-МАССИВОМ С ПОЛНЫМ ТЕКСТОМ ВАРИАНТОВ:`;
+    
+    // === ЦИКЛ ПОВТОРНЫХ ПОПЫТОК ===
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const currentTemperature = attempt === 1 ? 0.1 : 0.7;
+            
+            window.sendLogToBackground(`🤖 Запрос к ИИ (попытка ${attempt}/${MAX_RETRIES}, temp: ${currentTemperature})...`);
+            
+            const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer vIbfcVlLsLylHUHN19BiZUyc6amzLSVE",
+                },
+                body: JSON.stringify({
+                    model: "mistral-small-latest",
+                    messages: [
+                        { role: "system", content: systemMessage },
+                        { role: "user", content: userMessageBase }
+                    ],
+                    temperature: currentTemperature,
+                    top_p: 0.9,
+                    max_tokens: 512,
+                    response_format: { type: "json_object" }
+                })
+            });
+            
+            if (!response.ok) {
+                if ([503, 429, 500, 502, 504].includes(response.status)) {
+                    window.sendLogToBackground(`⚠️ Ошибка ${response.status}, повтор через ${RETRY_DELAY}мс...`);
+                    if (attempt < MAX_RETRIES) {
+                        await new Promise(r => setTimeout(r, RETRY_DELAY));
+                        continue;
+                    }
+                }
+                throw new Error(`API error: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            const aiResponseRaw = data.choices?.[0]?.message?.content?.trim();
+            
+            if (!aiResponseRaw) throw new Error("Пустой ответ от ИИ");
+            
+            window.sendLogToBackground(`📝 Ответ ИИ: ${aiResponseRaw.substring(0, 200)}...`);
+            
+            // 🧹 Очистка ответа
+            let aiVariants = [];
+            try {
+                const cleaned = aiResponseRaw
+                    .replace(/```json\s*/gi, '')
+                    .replace(/```\s*/g, '')
+                    .trim();
+                
+                aiVariants = JSON.parse(cleaned);
+                if (!Array.isArray(aiVariants)) throw new Error("Не массив");
+                
+                // ✅ Очищаем каждый элемент от лишних кавычек и пробелов
+                aiVariants = aiVariants.map(v => {
+                    if (typeof v === 'string') {
+                        return v.replace(/^["']|["']$/g, '').trim();
+                    }
+                    return v;
+                }).filter(v => v && typeof v === 'string');
+                
+            } catch (parseError) {
+                window.sendLogToBackground("⚠️ JSON parse error, пробуем extractQuotedText...");
+                aiVariants = window.extractQuotedText(aiResponseRaw);
+            }
+            
+            if (aiVariants.length === 0) throw new Error("Пустой результат");
+            
+            // 🔍 ПРОВЕРКА: Не вернул ли ИИ "вариант X" вместо текста
+            const invalidPatterns = [/вариант\s*\d+/i, /^\[\d+\]$/i, /^ответ\s*\d+/i, /^option\s*\d+/i];
+            const hasInvalidPattern = aiVariants.some(v => 
+                invalidPatterns.some(pattern => pattern.test(v))
+            );
+            
+            if (hasInvalidPattern) {
+                window.sendLogToBackground("❌ ИИ вернул номера вариантов вместо текста! Отклоняем.");
+                if (attempt < MAX_RETRIES) {
+                    userMessageBase += `\n\n⚠️ ВНИМАНИЕ: Твой предыдущий ответ содержал "вариант X" или номера вместо полного текста. Это НЕДОПУСТИМО. Верни ПОЛНЫЙ ТЕКСТ вариантов как они написаны в списке.`;
+                    continue;
+                }
+                // ✅ ИСПРАВЛЕНО: break вместо return для активации резервного плана
+                break;
+            }
+            
+            // 🔍 Совпадение с вариантами на странице
+            const matchedOptions = [];
+            for (const aiVariant of aiVariants) {
+                const normalizedAi = window.normalizeText(aiVariant);
+                const foundOriginal = options.find(opt => 
+                    opt === aiVariant || window.normalizeText(opt) === normalizedAi
+                );
+                if (foundOriginal) {
+                    matchedOptions.push(foundOriginal);
+                } else {
+                    window.sendLogToBackground(`⚠️ Вариант "${aiVariant}" не найден на странице`);
+                }
+            }
+            
+            if (matchedOptions.length === 0) throw new Error("Нет совпадений со страницей");
+            
+            // 🚫 Проверка на запрещённые комбинации (с сортировкой!)
+            const isDuplicate = incorrectCombinations.some(oldComb => {
+                if (oldComb.length !== matchedOptions.length) return false;
+                const normOld = oldComb.map(x => window.normalizeText(x)).sort();
+                const normNew = matchedOptions.map(x => window.normalizeText(x)).sort();
+                return JSON.stringify(normOld) === JSON.stringify(normNew);
+            });
+            
+            if (isDuplicate) {
+                window.sendLogToBackground("❌ ИИ предложил запрещённую комбинацию");
+                
+                if (attempt < MAX_RETRIES) {
+                    userMessageBase += `\n\n⚠️ ВНИМАНИЕ: Твой предыдущий ответ [${matchedOptions.join(', ')}] был ОТКЛОНЁН, так как совпадает с запрещённой комбинацией. ПОПРОБУЙ СНОВА, используя ДРУГИЕ варианты.`;
+                    continue;
+                }
+                
+                // ✅ ИСПРАВЛЕНО: break вместо return для активации резервного плана
+                window.sendLogToBackground("⚠️ Все попытки ИИ исчерпаны с запрещёнными ответами → активируем резервный план");
+                break;
+            }
+            
+            window.sendLogToBackground(`✅ Успех: [${matchedOptions.join('; ')}]`);
+            return matchedOptions;
+            
+        } catch (error) {
+            window.sendLogToBackground(`💥 Попытка ${attempt} неудачна: ${error.message}`);
+            if (attempt === MAX_RETRIES) {
+                window.sendLogToBackground("❌ Все попытки исчерпаны → резервный план");
+                break;
+            }
+        }
+    }
+    
+    // === 🛡️ РЕЗЕРВНЫЙ ПЛАН (выполняется если ИИ исчерпан или все ответы запрещены) ===
+    window.sendLogToBackground("🛡️ АКТИВАЦИЯ РЕЗЕРВНОГО ПЛАНА: Перебор свободных комбинаций...");
+    
+    const freeCombination = window.findFreeCombination(options, incorrectCombinations);
+    
+    if (freeCombination && freeCombination.length > 0) {
+        window.sendLogToBackground(`🎲 Резервный выбор (свободная комбинация): [${freeCombination.join('; ')}]`);
+        return freeCombination;
+    } else {
+        window.sendLogToBackground("❌ Все возможные комбинации исчерпаны! Вопрос требует ручного вмешательства.");
+        return [];
+    }
+};
+
+window.askAI = async function(question, options, isMultipleChoice) {
+    return await window.askAIWithIncorrectCombinations(question, options, isMultipleChoice, []);
+};
+
+// =====================================================================
+// === ЗАПРОС К RENDER СЕРВЕРУ ===
+// =====================================================================
+window.fetchAnswers = async function(question) {
+    if (window.isStopped) {
+        window.sendLogToBackground('Поиск остановлен пользователем до запроса к серверу.');
+        return [];
+    }
+    try {
+        window.setLoadingIndicator(true);
+        window.sendLogToBackground(`Запрос к серверу: ${question}`);
+        
+        const response = await fetch(encodeURI(`https://new-8peq.onrender.com/api/test?quest=${question}`), {
+            signal: window.abortController.signal,
+        });
+        
+        if (window.isStopped) return [];
+        if (!response.ok) throw new Error(`Server error: ${response.status}`);
+        
+        const data = await response.json();
+        if (!Array.isArray(data.correct_options) || !data.correct_options.length) {
+            window.setLoadingIndicator(true, false, 'Нет ответов');
+            return [];
+        }
+        return data.correct_options;
+    } catch (error) {
+        if (error.name !== 'AbortError') {
+            window.sendLogToBackground("Ошибка запроса:", error.message);
+        }
+        return [];
+    } finally {
+        window.setLoadingIndicator(false);
+    }
+};
+
+// =====================================================================
+// === РАБОТА С SUPABASE (ОБЩАЯ БАЗА) ===
+// =====================================================================
+
+// ✅ Поиск ответов в общей базе Supabase
+window.fetchAnswersFromSupabase = async function(question) {
+    if (!window.supabaseQuery) {
+        window.sendLogToBackground?.('⚠️ Supabase не инициализирован');
+        return [];
+    }
+    
+    try {
+        const questionHash = window.getQuestionHash(question);
+        
+        // Ищем записи с таким хэшем, сортируем по голосам и дате
+        const { data: records, error } = await window.supabaseQuery(
+            `/rest/v1/questions?question_hash=eq.${questionHash}&order=votes.desc,created_at.desc&limit=10`
+        );
+        
+        if (error) throw error;
+        
+        if (!records || records.length === 0) {
+            window.sendLogToBackground?.(`🔍 В Supabase не найдено записей для вопроса`);
+            return [];
+        }
+        
+        window.sendLogToBackground?.(`🔍 Найдено ${records.length} записей в Supabase`);
+        
+        // Ищем запись с is_correct = true
+        const correctRecord = records.find(r => r.is_correct === true);
+        if (correctRecord && correctRecord.answers) {
+            window.sendLogToBackground?.(`✅ Найдена ПРАВИЛЬНАЯ комбинация в Supabase (голосов: ${correctRecord.votes})`);
+            return correctRecord.answers;
+        }
+        
+        // Если нет правильных — возвращаем самую популярную
+        const topRecord = records[0];
+        if (topRecord && topRecord.answers) {
+            window.sendLogToBackground?.(`⚠️ Найдена комбинация в Supabase (статус: ${topRecord.is_correct}, голосов: ${topRecord.votes})`);
+            return topRecord.answers;
+        }
+        
+        return [];
+        
+    } catch (error) {
+        window.sendLogToBackground?.(`⚠️ Ошибка поиска в Supabase: ${error.message}`);
+        return [];
+    }
+};
+
+// ✅ Сохранение ответа в общую базу Supabase
+// ✅ ВАЖНО: Сохраняем ТОЛЬКО если режим auto_ai
+window.saveAnswerToSupabase = async function(question, answers, isCorrect = null) {
+    // ✅ ПРОВЕРКА РЕЖИМА - СОХРАНЯЕМ ТОЛЬКО В AUTO_AI
+    if (window.currentMode !== 'auto_ai') {
+        window.sendLogToBackground?.(`ℹ️ Пропуск сохранения в Supabase (режим: ${window.currentMode})`);
+        return false;
+    }
+    
+    if (!window.supabaseWrite || !answers || answers.length === 0) return false;
+    
+    try {
+        const questionHash = window.getQuestionHash(question);
+        const normalizedAnswers = answers.map(a => a.trim()).sort();
+        
+        // Проверяем на дубликат
+        const { data: existing, error: findError } = await window.supabaseQuery(
+            `/rest/v1/questions?question_hash=eq.${questionHash}&answers=cs.{${normalizedAnswers.join(',')}}&select=*`
+        );
+        
+        if (findError) throw findError;
+        
+        if (existing && existing.length > 0) {
+            // Запись уже существует — обновляем если статус изменился
+            const record = existing[0];
+            if (isCorrect !== null && record.is_correct !== isCorrect) {
+                await window.supabaseWrite(
+                    `/rest/v1/questions?id=eq.${record.id}`,
+                    {
+                        method: 'PATCH',
+                        body: JSON.stringify({
+                            is_correct: isCorrect,
+                            votes: (record.votes || 0) + 1,
+                            updated_at: new Date().toISOString()
+                        })
+                    }
+                );
+                window.sendLogToBackground?.(`🔄 Обновлено в Supabase #${record.id}: ${isCorrect ? 'ВЕРНО' : 'НЕВЕРНО'}`);
+            }
+            return true;
+        }
+        
+        // Создаём новую запись
+        await window.supabaseWrite(
+            '/rest/v1/questions',
+            {
+                method: 'POST',
+                body: JSON.stringify({
+                    question_hash: questionHash,
+                    question: question.trim(),
+                    answers: normalizedAnswers,
+                    is_correct: isCorrect,
+                    votes: isCorrect === true ? 1 : 0,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                })
+            }
+        );
+        
+        const statusText = isCorrect === null ? 'попытка (null)' : (isCorrect ? 'ВЕРНО' : 'НЕВЕРНО');
+        window.sendLogToBackground?.(`💾 Сохранено в Supabase: "${question.substring(0, 40)}..." [${statusText}]`);
+        return true;
+        
+    } catch (error) {
+        window.sendLogToBackground?.(`❌ Ошибка сохранения в Supabase: ${error.message}`);
+        return false;
+    }
+};
+
+// ✅ УНИВЕРСАЛЬНЫЙ ПОИСК: Supabase → Render API → пустой массив
+window.fetchAnswersUniversal = async function(question) {
+    if (window.isStopped) return [];
+    
+    window.sendLogToBackground?.(`\n🔍 === УНИВЕРСАЛЬНЫЙ ПОИСК ===`);
+    
+    // 1. Пробуем общую базу Supabase
+    window.sendLogToBackground?.(`1️⃣ Поиск в общей базе Supabase...`);
+    let answers = await window.fetchAnswersFromSupabase(question);
+    if (answers && answers.length > 0) {
+        window.sendLogToBackground?.(`✅ Найдено в Supabase: ${answers.length} ответов`);
+        return answers;
+    }
+    
+    // 2. Пробуем Render API
+    window.sendLogToBackground?.(`2️⃣ Поиск в Render API...`);
+    answers = await window.fetchAnswers(question);
+    if (answers && answers.length > 0) {
+        window.sendLogToBackground?.(`✅ Найдено в Render: ${answers.length} ответов`);
+        // Сохраняем находку в общую базу (только если auto_ai)
+        if (window.currentMode === 'auto_ai') {
+            await window.saveAnswerToSupabase(question, answers, null);
+        }
+        return answers;
+    }
+    
+    // 3. Ничего не найдено
+    window.sendLogToBackground?.(`❌ Ничего не найдено в базах`);
+    return [];
+};
