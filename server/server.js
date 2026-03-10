@@ -2,14 +2,13 @@
 require('dotenv').config();
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const cors = require('cors');
+const cors = require('cors');  // ← ТОЛЬКО ОДИН РАЗ!
 const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 // Middleware
-const cors = require('cors');
 app.use(cors({
     origin: ['chrome-extension://*', 'https://edu.rosminzdrav.ru'],
     methods: ['GET', 'POST'],
