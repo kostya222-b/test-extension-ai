@@ -9,6 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // Middleware
+const cors = require('cors');
 app.use(cors({
     origin: ['chrome-extension://*', 'https://edu.rosminzdrav.ru'],
     methods: ['GET', 'POST'],

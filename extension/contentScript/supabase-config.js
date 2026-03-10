@@ -7,7 +7,7 @@ const CONFIG = {
     supabaseUrl: 'https://ofxbtognakyiugrijbat.supabase.co',
     supabaseAnonKey: 'sb_publishable_9hwkldYTVXAbLJuQ9IRzxw_UD4Uls6B',
     apiKey: 'xK9mP2nQ7vL4wR8tY3sF6hJ1zX5cV9bN3mL7kP2',  // Тот же что в Render
-    timeout: 15000
+    timeout: 30000
 };
 
 // =====================================================================
