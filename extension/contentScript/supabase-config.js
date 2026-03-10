@@ -6,14 +6,14 @@ const CONFIG = {
     supabaseUrl: 'https://ofxbtognakyiugrijbat.supabase.co',
     supabaseAnonKey: 'sb_publishable_9hwkldYTVXAbLJuQ9IRzxw_UD4Uls6B',
     apiKey: 'xK9mP2nQ7vL4wR8tY3sF6hJ1zX5cV9bN3mL7kP2',
-    timeout: 15000
+    timeout: 30000
 };
 
 // =====================================================================
 // === ФУНКЦИИ ДЛЯ РАБОТЫ С RENDER BACKEND ===
 // =====================================================================
 
-// ✅ Поиск ответов через Render сервер
+// Поиск ответов через Render сервер
 window.fetchAnswersFromServer = async function(question) {
     try {
         const response = await fetch(`${CONFIG.backendUrl}/api/answers?question=${encodeURIComponent(question)}`, {
@@ -25,7 +25,7 @@ window.fetchAnswersFromServer = async function(question) {
         if (!response.ok) throw new Error(`Server error: ${response.status}`);
 
         const result = await response.json();
-        
+
         if (result.success && result.data?.length > 0) {
             const correctRecord = result.data.find(r => r.is_correct === true);
             if (correctRecord?.answers) {
@@ -45,14 +45,14 @@ window.fetchAnswersFromServer = async function(question) {
     }
 };
 
-// ✅ Сохранение ответа через Render сервер
+// Сохранение ответа через Render сервер
 window.saveAnswerToServer = async function(question, answers, isCorrect = null) {
     if (window.currentMode !== 'auto_ai') {
         window.sendLogToBackground?.(`ℹ️ Пропуск сохранения (режим: ${window.currentMode})`);
         return false;
     }
     if (!answers?.length) return false;
-    
+
     try {
         const response = await fetch(`${CONFIG.backendUrl}/api/answers`, {
             method: 'POST',
@@ -80,12 +80,49 @@ window.saveAnswerToServer = async function(question, answers, isCorrect = null) 
     }
 };
 
-// ✅ Экспорт в глобальную область
+// ✅ Обновление статуса ответа через Render сервер (ИСПРАВЛЕНО!)
+window.updateAnswerStatus = async function(id, isCorrect) {
+    if (!id) {
+        window.sendLogToBackground?.(`⚠️ Нет ID для обновления`);
+        return false;
+    }
+
+    try {
+        const response = await fetch(`${CONFIG.backendUrl}/api/answers/${id}`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': CONFIG.apiKey
+            },
+            body: JSON.stringify({
+                isCorrect: isCorrect
+            }),
+            signal: AbortSignal.timeout(CONFIG.timeout)
+        });
+
+        if (!response.ok) {
+            throw new Error(`Status ${response.status}`);
+        }
+
+        const result = await response.json();
+        if (result.success) {
+            window.sendLogToBackground?.(`✅ Успешно обновлено #${id}`);
+            return true;
+        }
+        return false;
+    } catch (error) {
+        window.sendLogToBackground?.(`⚠️ Ошибка обновления #${id}: ${error.message}`);
+        return false;
+    }
+};
+
+// Экспорт в глобальную область
 window.CONFIG = CONFIG;
 window.fetchAnswersFromServer = fetchAnswersFromServer;
 window.saveAnswerToServer = saveAnswerToServer;
+window.updateAnswerStatus = updateAnswerStatus;
 
-// ✅ Проверка подключения
+// Проверка подключения
 (async function testConnection() {
     try {
         const response = await fetch(`${CONFIG.backendUrl}/health`);

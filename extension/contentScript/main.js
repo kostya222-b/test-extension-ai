@@ -9,11 +9,6 @@ if (chrome.runtime && chrome.runtime.sendMessage) {
 }
 
 if (typeof window.isModalVisible === 'undefined') window.isModalVisible = false;
-
-// =====================================================================
-// === ИНИЦИАЛИЗАЦИЯ ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ ===
-// =====================================================================
-if (typeof window.isModalVisible === 'undefined') window.isModalVisible = false;
 if (typeof window.abortController === 'undefined') window.abortController = new AbortController();
 if (typeof window.fetchPromise === 'undefined') window.fetchPromise = null;
 if (typeof window.isExecuting === 'undefined') window.isExecuting = false;
@@ -37,6 +32,7 @@ if (typeof window.isFinishingTest === 'undefined') window.isFinishingTest = fals
 if (typeof window.targetGrade === 'undefined') window.targetGrade = 5;
 if (typeof window.isNavigatingToTest === 'undefined') window.isNavigatingToTest = false;
 if (typeof window.shouldCheckResults === 'undefined') window.shouldCheckResults = false;
+
 // ✅ НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ АВТО-ПЕРЕЗАГРУЗКИ
 if (typeof window.maxReloadAttempts === 'undefined') window.maxReloadAttempts = 3;
 if (typeof window.currentReloadCount === 'undefined') window.currentReloadCount = 0;
@@ -265,22 +261,17 @@ window.saveQuestionToDB = async function(question, selectedAnswers, isCorrect = 
     }
 };
 
-// =====================================================================
-// === ПОИСК: Supabase → локальный кэш ===
-// =====================================================================
+// ✅ ПОИСК: Supabase → локальный кэш
 window.findQuestionInDB = async function(question) {
     // 1. Сначала пробуем Supabase
     try {
-        const supabaseResult = await window.fetchAnswersFromServer(question);
-        
-        // ✅ Проверяем, что вернулся объект с ответами и ID
-        if (supabaseResult && supabaseResult.answers && Array.isArray(supabaseResult.answers) && supabaseResult.answers.length > 0) {
+        const supabaseAnswers = await window.fetchAnswersFromSupabase(question);
+        if (supabaseAnswers && supabaseAnswers.length > 0) {
             return [{
                 questionHash: window.getQuestionHash(question),
                 question,
-                selectedAnswers: supabaseResult.answers,
-                isCorrect: supabaseResult.is_correct,
-                id: supabaseResult.id,  // ← СОХРАНЯЕМ ID ИЗ СЕРВЕРА!
+                selectedAnswers: supabaseAnswers,
+                isCorrect: true,
                 timestamp: new Date().toISOString(),
                 source: 'supabase'
             }];
@@ -329,7 +320,7 @@ window.exportDatabase = async function() {
             window.sendLogToBackground(`📤 Подготовлено ${data.length} записей`);
         };
     } catch (error) {
-        window.sendLogToBackground("❌ Ошибка экспорта БД: ", error);
+        window.sendLogToBackground("❌ Ошибка экспорта БД:", error);
     }
 };
 
@@ -360,18 +351,17 @@ window.detectPageType = function() {
 // =====================================================================
 window.detectPageError = function() {
     const errorPatterns = [
-        /500\s*(Internal\s*Server\s*Error)/i,
-        /502\s*(Bad\s*Gateway)/i,
-        /503\s*(Service\s*Unavailable)/i,
-        /504\s*(Gateway\s*Timeout)/i,
-        /404\s*(Not\s*Found)/i,
-        /Ошибка\s*сервера/i,
-        /Server\s*Error/i,
-        /Service\s*Unavailable/i,
-        /Технические\s*работы/i,
-        /Временная\s*недоступность/i
+        /500\s*(Internal\sServer\sError)/i,
+        /502\s*(Bad\sGateway)/i,
+        /503\s*(Service\sUnavailable)/i,
+        /504\s*(Gateway\sTimeout)/i,
+        /404\s*(Not\sFound)/i,
+        /Ошибка\sсервера/i,
+        /Server\sError/i,
+        /Service\sUnavailable/i,
+        /Технические\sработы/i,
+        /Временная\sнедоступность/i
     ];
-
     const pageText = document.body?.innerText || '';
 
     for (const pattern of errorPatterns) {
@@ -403,7 +393,6 @@ window.handlePageError = async function() {
         window.sendLogToBackground("❌ Авто-перезагрузка только для режима auto_ai");
         return false;
     }
-
     if (!window.isLocked || window.isStopped) {
         window.sendLogToBackground("❌ Скрипт не активен");
         return false;
@@ -578,7 +567,7 @@ window.handleTestVariantsPage = async function() {
 
     } catch (error) {
         if (window.isStopped) return;
-        window.sendLogToBackground("❌ Ошибка обработки вариантов: ", error.message);
+        window.sendLogToBackground("❌ Ошибка обработки вариантов:", error.message);
         window.setLoadingIndicator(true, false, "Ошибка навигации");
     }
 };
@@ -853,7 +842,7 @@ window.autoStartTestFlow = async function() {
         window.setLoadingIndicator(true, false, "Не удалось определить страницу");
 
     } catch (error) {
-        window.sendLogToBackground("❌ Ошибка автозапуска: ", error.message);
+        window.sendLogToBackground("❌ Ошибка автозапуска:", error.message);
         window.setLoadingIndicator(true, false, "Ошибка: " + error.message);
     }
 };
@@ -903,7 +892,7 @@ window.setupQuestionObserver = function() {
         const currentQuestionText = questionTitleElement.textContent?.trim();
         if (!currentQuestionText) return;
 
-        window.sendLogToBackground("📝 Обнаружено изменение вопроса: ", currentQuestionText);
+        window.sendLogToBackground("📝 Обнаружено изменение вопроса:", currentQuestionText);
 
         if (!window.isStopped) {
             window.setLoadingIndicator(true);
@@ -927,7 +916,7 @@ window.setupQuestionObserver = function() {
                     window.setLoadingIndicator(true, false, "Нет ответов");
                 }
             } catch (error) {
-                window.sendLogToBackground("❌ Ошибка запроса: ", error);
+                window.sendLogToBackground("❌ Ошибка запроса:", error);
                 window.setLoadingIndicator(true, false, "Ошибка запроса");
             } finally {
                 window.setLoadingIndicator(false);
@@ -1149,7 +1138,7 @@ window.executeModeLogic = async function() {
             window.stopScript(true);
         }
     } catch (error) {
-        window.sendLogToBackground("❌ Ошибка в executeModeLogic: ", error.message);
+        window.sendLogToBackground("❌ Ошибка в executeModeLogic:", error.message);
         window.setLoadingIndicator(false);
     } finally {
         window.isExecuting = false;
@@ -1430,7 +1419,7 @@ window.executeAutoAIModeLogic = async function() {
             window.stopScript(true);
         }
     } catch (error) {
-        window.sendLogToBackground("❌ Ошибка в executeAutoAIModeLogic: ", error.message);
+        window.sendLogToBackground("❌ Ошибка в executeAutoAIModeLogic:", error.message);
         window.setLoadingIndicator(false);
     } finally {
         window.isExecuting = false;
@@ -1444,7 +1433,6 @@ window.checkTestResults = async function() {
     window.sendLogToBackground("📊 Проверка результатов и оценки...");
     let attempts = 0;
     const maxAttempts = 30;
-    
     if (window.checkResultsInterval) {
         clearInterval(window.checkResultsInterval);
         window.checkResultsInterval = null;
@@ -1473,127 +1461,74 @@ window.checkTestResults = async function() {
             let updatedCount = 0;
             let createdCount = 0;
 
-            // ✅ ОБРАБАТЫВАЕМ ВОПРОСЫ ПАКЕТАМИ ПО 5 ШТУК
-            const batchSize = 5;
-            const batches = [];
-            
-            for (let i = 0; i < questionItems.length; i += batchSize) {
-                batches.push(Array.from(questionItems).slice(i, i + batchSize));
-            }
+            const promises = Array.from(questionItems).map(async (item) => {
+                try {
+                    const questionTitle = item.querySelector('.questionList-item-content-title, .question-title-text');
+                    const questionText = questionTitle?.textContent?.trim() || '';
+                    if (!questionText) return;
 
-            for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-                const batch = batches[batchIndex];
-                window.sendLogToBackground(`📦 Обработка пакета ${batchIndex + 1}/${batches.length} (${batch.length} вопросов)`);
+                    const answerElements = item.querySelectorAll('.questionList-item-content-answer-text, .selected-answer');
+                    const selectedAnswersFromPage = Array.from(answerElements)
+                        .map(el => el.textContent?.trim())
+                        .filter(Boolean);
 
-                const promises = batch.map(async (item) => {
-                    try {
-                        const questionTitle = item.querySelector('.questionList-item-content-title, .question-title-text');
-                        const questionText = questionTitle?.textContent?.trim() || '';
-                        if (!questionText) return;
+                    if (selectedAnswersFromPage.length === 0) return;
 
-                        const answerElements = item.querySelectorAll('.questionList-item-content-answer-text, .selected-answer');
-                        const selectedAnswersFromPage = Array.from(answerElements)
-                            .map(el => el.textContent?.trim())
-                            .filter(Boolean);
+                    const statusElement = item.querySelector('.questionList-item-status-notWright, .incorrect, .wrong, .status-incorrect');
+                    const isCorrectFromPage = !statusElement;
 
-                        if (selectedAnswersFromPage.length === 0) return;
+                    const dbRecords = await window.findQuestionInDB(questionText);
 
-                        const statusElement = item.querySelector('.questionList-item-status-notWright, .incorrect, .wrong, .status-incorrect');
-                        const isCorrectFromPage = !statusElement;
-
-                        const dbRecords = await window.findQuestionInDB(questionText);
-
-                        // ✅ СОХРАНЯЕМ В БД ТОЛЬКО ЕСЛИ РЕЖИМ auto_ai
-                        if (window.currentMode !== 'auto_ai') {
-                            window.sendLogToBackground(`ℹ️ Пропуск сохранения (режим: ${window.currentMode})`);
-                            processedCount++;
-                            return;
-                        }
-
-                        if (!dbRecords || dbRecords.length === 0) {
-                            window.sendLogToBackground(`➕ НОВАЯ запись: [${selectedAnswersFromPage.join('; ')}]`);
-                            await window.saveQuestionToDB(questionText, selectedAnswersFromPage, isCorrectFromPage);
-                            createdCount++;
-                            processedCount++;
-                            return;
-                        }
-
-                        let matchFound = false;
-                        for (const record of dbRecords) {
-                            if (!record.selectedAnswers || !Array.isArray(record.selectedAnswers)) continue;
-
-                            const normalizedDb = record.selectedAnswers.map(a => window.normalizeText(a)).sort();
-                            const normalizedPage = selectedAnswersFromPage.map(a => window.normalizeText(a)).sort();
-
-                            if (normalizedDb.length === normalizedPage.length && 
-                                normalizedDb.every((val, i) => val === normalizedPage[i])) {
-
-                                matchFound = true;
-                                if (record.isCorrect !== isCorrectFromPage) {
-                                    window.sendLogToBackground(`🔄 Обновление #${record.id}: ${record.isCorrect} → ${isCorrectFromPage}`);
-                                    
-                                    // ✅ ДОБАВЛЕНА ПОВТОРНАЯ ПОПЫТКА ПРИ ОШИБКЕ
-                                    let retryCount = 0;
-                                    const maxRetries = 3;
-                                    let success = false;
-                                    
-                                    while (retryCount < maxRetries && !success) {
-                                        try {
-                                            const response = await fetch(`${window.CONFIG.backendUrl}/api/answers/${record.id}`, {
-                                                method: 'PATCH',
-                                                headers: {
-                                                    'Content-Type': 'application/json',
-                                                    'X-API-Key': window.CONFIG.apiKey
-                                                },
-                                                body: JSON.stringify({
-                                                    isCorrect: isCorrectFromPage
-                                                }),
-                                                signal: AbortSignal.timeout(10000)
-                                            });
-                                            
-                                            if (response.ok) {
-                                                updatedCount++;
-                                                window.sendLogToBackground(`✅ Успешно обновлено #${record.id}`);
-                                                success = true;
-                                            } else {
-                                                throw new Error(`Status ${response.status}`);
-                                            }
-                                        } catch (error) {
-                                            retryCount++;
-                                            window.sendLogToBackground(`⚠️ Попытка ${retryCount}/${maxRetries} не удалась для #${record.id}: ${error.message}`);
-                                            
-                                            if (retryCount < maxRetries) {
-                                                // ✅ ЖДЁМ 2 СЕКУНДЫ ПЕРЕД СЛЕДУЮЩЕЙ ПОПЫТКОЙ
-                                                await new Promise(resolve => setTimeout(resolve, 2000));
-                                            } else {
-                                                window.sendLogToBackground(`❌ Все попытки исчерпаны для #${record.id}`);
-                                            }
-                                        }
-                                    }
-                                }
-                                break;
-                            }
-                        }
-
-                        if (!matchFound) {
-                            window.sendLogToBackground(`❓ Новая комбинация: [${selectedAnswersFromPage.join('; ')}]`);
-                            await window.saveQuestionToDB(questionText, selectedAnswersFromPage, isCorrectFromPage);
-                            createdCount++;
-                        }
+                    // ✅ СОХРАНЯЕМ В БД ТОЛЬКО ЕСЛИ РЕЖИМ auto_ai
+                    if (window.currentMode !== 'auto_ai') {
+                        window.sendLogToBackground(`ℹ️ Пропуск сохранения (режим: ${window.currentMode})`);
                         processedCount++;
-                    } catch (e) {
-                        window.sendLogToBackground("⚠️ Ошибка: ", e);
+                        return;
                     }
-                });
 
-                await Promise.all(promises);
-                
-                // ✅ ПАУЗА 3 СЕКУНДЫ МЕЖДУ ПАКЕТАМИ
-                if (batchIndex < batches.length - 1) {
-                    window.sendLogToBackground(`⏳ Пауза 3 секунды перед следующим пакетом...`);
-                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    if (!dbRecords || dbRecords.length === 0) {
+                        window.sendLogToBackground(`➕ НОВАЯ запись: [${selectedAnswersFromPage.join('; ')}]`);
+                        await window.saveQuestionToDB(questionText, selectedAnswersFromPage, isCorrectFromPage);
+                        createdCount++;
+                        processedCount++;
+                        return;
+                    }
+
+                    let matchFound = false;
+                    for (const record of dbRecords) {
+                        if (!record.selectedAnswers || !Array.isArray(record.selectedAnswers)) continue;
+
+                        const normalizedDb = record.selectedAnswers.map(a => window.normalizeText(a)).sort();
+                        const normalizedPage = selectedAnswersFromPage.map(a => window.normalizeText(a)).sort();
+
+                        if (normalizedDb.length === normalizedPage.length &&
+                            normalizedDb.every((val, i) => val === normalizedPage[i])) {
+
+                            matchFound = true;
+                            if (record.isCorrect !== isCorrectFromPage) {
+                                window.sendLogToBackground(`🔄 Обновление #${record.id}: ${record.isCorrect} → ${isCorrectFromPage}`);
+                                const transaction = window.db.transaction(['questions'], 'readwrite');
+                                const store = transaction.objectStore('questions');
+                                record.isCorrect = isCorrectFromPage;
+                                store.put(record);
+                                updatedCount++;
+                            }
+                            break;
+                        }
+                    }
+
+                    if (!matchFound) {
+                        window.sendLogToBackground(`❓ Новая комбинация: [${selectedAnswersFromPage.join('; ')}]`);
+                        await window.saveQuestionToDB(questionText, selectedAnswersFromPage, isCorrectFromPage);
+                        createdCount++;
+                    }
+                    processedCount++;
+                } catch (e) {
+                    window.sendLogToBackground("⚠️ Ошибка:", e);
                 }
-            }
+            });
+
+            await Promise.all(promises);
 
             window.sendLogToBackground(`📊 Итого: Обработано=${processedCount}, Обновлено=${updatedCount}, Создано=${createdCount}`);
             window.tryFinishTestFlow();
@@ -1686,7 +1621,7 @@ window.tryFinishTestFlow = async function() {
 // =====================================================================
 if (!window.messageListenerSet) {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        window.sendLogToBackground("📨 Получено: ", request.action);
+        window.sendLogToBackground("📨 Получено:", request.action);
         switch (request.action) {
             case "showModal":
                 window.showModal();
