@@ -2,10 +2,10 @@
 // === КОНФИГУРАЦИЯ (Render Backend) ===
 // =====================================================================
 const CONFIG = {
-    backendUrl: 'https://test-extension-ai.onrender.com',  // Ваш Render URL
+    backendUrl: 'https://test-extension-ai.onrender.com',
     supabaseUrl: 'https://ofxbtognakyiugrijbat.supabase.co',
     supabaseAnonKey: 'sb_publishable_9hwkldYTVXAbLJuQ9IRzxw_UD4Uls6B',
-    apiKey: 'xK9mP2nQ7vL4wR8tY3sF6hJ1zX5cV9bN3mL7kP2',  // Тот же что в Render
+    apiKey: 'xK9mP2nQ7vL4wR8tY3sF6hJ1zX5cV9bN3mL7kP2',
     timeout: 15000
 };
 
@@ -27,25 +27,15 @@ window.fetchAnswersFromServer = async function(question) {
         const result = await response.json();
         
         if (result.success && result.data?.length > 0) {
-            // Сначала ищем запись с is_correct = true
             const correctRecord = result.data.find(r => r.is_correct === true);
             if (correctRecord?.answers) {
-                window.sendLogToBackground?.(`✅ Найдено на сервере: ${correctRecord.answers.length} ответов (ID: ${correctRecord.id})`);
-                return {
-                    answers: correctRecord.answers,
-                    id: correctRecord.id,  // ← ВОЗВРАЩАЕМ ID!
-                    is_correct: correctRecord.is_correct
-                };
+                window.sendLogToBackground?.(`✅ Найдено на сервере: ${correctRecord.answers.length} ответов`);
+                return correctRecord.answers;
             }
-            // Если нет правильных — возвращаем самую популярную
             const topRecord = result.data[0];
             if (topRecord?.answers) {
-                window.sendLogToBackground?.(`⚠️ Найдено на сервере (статус: ${topRecord.is_correct}, голосов: ${topRecord.votes}, ID: ${topRecord.id})`);
-                return {
-                    answers: topRecord.answers,
-                    id: topRecord.id,  // ← ВОЗВРАЩАЕМ ID!
-                    is_correct: topRecord.is_correct
-                };
+                window.sendLogToBackground?.(`⚠️ Найдено на сервере (статус неизвестен)`);
+                return topRecord.answers;
             }
         }
         return [];
@@ -57,14 +47,12 @@ window.fetchAnswersFromServer = async function(question) {
 
 // ✅ Сохранение ответа через Render сервер
 window.saveAnswerToServer = async function(question, answers, isCorrect = null) {
-    // ✅ ПРОВЕРКА РЕЖИМА — СОХРАНЯЕМ ТОЛЬКО В AUTO_AI
     if (window.currentMode !== 'auto_ai') {
         window.sendLogToBackground?.(`ℹ️ Пропуск сохранения (режим: ${window.currentMode})`);
         return false;
     }
-    
     if (!answers?.length) return false;
-
+    
     try {
         const response = await fetch(`${CONFIG.backendUrl}/api/answers`, {
             method: 'POST',
@@ -81,9 +69,8 @@ window.saveAnswerToServer = async function(question, answers, isCorrect = null) 
         });
 
         const result = await response.json();
-        
         if (result.success) {
-            window.sendLogToBackground?.(`💾 Сохранено на сервере: "${question.substring(0, 40)}..." [ID: ${result.data?.id}]`);
+            window.sendLogToBackground?.(`💾 Сохранено на сервере: "${question.substring(0, 40)}..."`);
             return true;
         }
         return false;
