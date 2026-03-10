@@ -1,8 +1,6 @@
 // =====================================================================
 // === ИНИЦИАЛИЗАЦИЯ ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ ===
 // =====================================================================
-
-// ✅ ЛОГ ПРИ ЗАГРУЗКЕ КОНТЕНТ-СКРИПТА
 console.log('🔧 contentScript/main.js загружен');
 if (chrome.runtime && chrome.runtime.sendMessage) {
     chrome.runtime.sendMessage({ action: "log", args: ["✅ Контент-скрипт инициализирован"] }).catch(() => {});
@@ -32,8 +30,6 @@ if (typeof window.isFinishingTest === 'undefined') window.isFinishingTest = fals
 if (typeof window.targetGrade === 'undefined') window.targetGrade = 5;
 if (typeof window.isNavigatingToTest === 'undefined') window.isNavigatingToTest = false;
 if (typeof window.shouldCheckResults === 'undefined') window.shouldCheckResults = false;
-
-// ✅ НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ АВТО-ПЕРЕЗАГРУЗКИ
 if (typeof window.maxReloadAttempts === 'undefined') window.maxReloadAttempts = 3;
 if (typeof window.currentReloadCount === 'undefined') window.currentReloadCount = 0;
 if (typeof window.lastErrorTime === 'undefined') window.lastErrorTime = 0;
@@ -63,88 +59,6 @@ function getRandomCoordinates(element) {
     };
 }
 
-// =====================================================================
-// === КЛАСС: НАБЛЮДАТЕЛЬ DOM ===
-// =====================================================================
-class GlobalSelectorMutationObserver {
-    constructor() {
-        this.observer = new MutationObserver(this.handleMutations.bind(this));
-        this.config = { attributes: true, childList: true, subtree: true };
-        this.selectors = new Map();
-        this.observer.observe(document.documentElement, this.config);
-    }
-
-    waitFor(selector, options) {
-        return new Promise((resolve, reject) => {
-            if (!options) options = { add: true };
-            const result = this.checkForResolve(null, selector, options);
-            if (result) { resolve(result); return; }
-
-            const timerTimeoutId = setTimeout(() => {
-                reject('timeout');
-            }, options.timeout || 30000);
-
-            if (!this.selectors.has(selector)) this.selectors.set(selector, []);
-            this.selectors.get(selector).push({ resolve, reject, options, timerTimeoutId });
-        });
-    }
-
-    handleMutations(mutations) {
-        this.selectors.forEach((resolvers, selector) => {
-            let shouldDelete = false;
-            resolvers.forEach(({ resolve, reject, options, timerTimeoutId }) => {
-                const result = this.checkForResolve(mutations, selector, options);
-                if (result) {
-                    shouldDelete = true;
-                    clearTimeout(timerTimeoutId);
-                    resolve(result);
-                }
-            });
-            if (shouldDelete) this.selectors.delete(selector);
-        });
-    }
-
-    checkForResolve(mutations, selector, options) {
-        if (options.removeOnce) {
-            if (!mutations) return;
-            for (const mutation of mutations) {
-                for (const el of mutation.removedNodes) {
-                    if (el?.matches?.(selector) || el?.querySelector?.(selector)) return el;
-                }
-            }
-        } else if (options.change) {
-            if (!mutations) return;
-            for (const mutation of mutations) {
-                const element = mutation?.target?.matches?.(selector) || mutation?.target?.closest?.(selector) || mutation?.target?.querySelector?.(selector);
-                if (element) return element;
-            }
-        } else {
-            const element = document.querySelector(selector);
-            if (options.add) { if (element) return element; }
-            else if (options.remove) { if (!element) return true; }
-            else if (options.text) {
-                const textContent = element?.textContent?.trim();
-                if (textContent && (!options.reverse ? textContent.includes(options.text) : !textContent.includes(options.text))) return element;
-            } else { throw Error('Не верно передан options'); }
-        }
-        return null;
-    }
-
-    rejectAllWait(reason) {
-        this.selectors.forEach((resolvers) => {
-            resolvers.forEach(({ resolve, reject, options, timerTimeoutId }) => {
-                clearTimeout(timerTimeoutId);
-                options.dontReject ? resolve() : reject(reason);
-            });
-        });
-    }
-
-    disconnect() { this.observer.disconnect(); this.selectors.clear(); }
-}
-
-// =====================================================================
-// === ЭМУЛЯЦИЯ КЛИКОВ ===
-// =====================================================================
 async function simulateClick(element) {
     if (!element) return;
     element.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -199,27 +113,28 @@ window.getQuestionHash = function(question) {
     return Math.abs(hash).toString(36);
 };
 
-// ✅ СОХРАНЕНИЕ: Supabase + локальный кэш (ТОЛЬКО auto_ai)
+window.normalizeText = function(text) {
+    return text?.toLowerCase().trim().replace(/\s+/g, ' ') || '';
+};
+
+// ✅ СОХРАНЕНИЕ: Supabase + локальный кэш
 window.saveQuestionToDB = async function(question, selectedAnswers, isCorrect = null) {
     if (isCorrect === true && (!selectedAnswers || !Array.isArray(selectedAnswers) || selectedAnswers.length === 0)) {
         window.sendLogToBackground("⚠️ Пропущено сохранение: верный ответ без вариантов");
         return;
     }
-
-    // ✅ 1. Сохраняем в Supabase ТОЛЬКО если режим auto_ai
+    
     if (window.currentMode === 'auto_ai') {
         await window.saveAnswerToSupabase(question, selectedAnswers, isCorrect);
-    } else {
+    } else { 
         window.sendLogToBackground(`ℹ️ Пропуск сохранения в Supabase (режим: ${window.currentMode})`);
     }
 
-    // ✅ 2. Всегда сохраняем локально для кэша и офлайн-работы
     try {
         const db = await window.initDatabase();
         const transaction = db.transaction(['questions'], 'readwrite');
         const store = transaction.objectStore('questions');
         const questionHash = window.getQuestionHash(question);
-
         const allRecordsRequest = store.getAll();
 
         return new Promise((resolve) => {
@@ -265,13 +180,14 @@ window.saveQuestionToDB = async function(question, selectedAnswers, isCorrect = 
 window.findQuestionInDB = async function(question) {
     // 1. Сначала пробуем Supabase
     try {
-        const supabaseAnswers = await window.fetchAnswersFromSupabase(question);
-        if (supabaseAnswers && supabaseAnswers.length > 0) {
+        const supabaseResult = await window.fetchAnswersFromServer(question);
+        if (supabaseResult && supabaseResult.answers && Array.isArray(supabaseResult.answers) && supabaseResult.answers.length > 0) {
             return [{
                 questionHash: window.getQuestionHash(question),
                 question,
-                selectedAnswers: supabaseAnswers,
-                isCorrect: true,
+                selectedAnswers: supabaseResult.answers,
+                isCorrect: supabaseResult.is_correct,
+                id: supabaseResult.id,  // ← СОХРАНЯЕМ ID ИЗ СЕРВЕРА!
                 timestamp: new Date().toISOString(),
                 source: 'supabase'
             }];
@@ -300,1132 +216,6 @@ window.findQuestionInDB = async function(question) {
     }
 };
 
-window.exportDatabase = async function() {
-    try {
-        const db = await window.initDatabase();
-        const transaction = db.transaction(['questions'], 'readonly');
-        const store = transaction.objectStore('questions');
-        const request = store.getAll();
-        request.onsuccess = () => {
-            const data = request.result;
-            const csvContent = ["id,questionHash,question,selectedAnswers,isCorrect,timestamp"];
-            data.forEach(item => {
-                const escapedQuestion = item.question.replace(/"/g, '""');
-                const escapedAnswers = Array.isArray(item.selectedAnswers) ?
-                    item.selectedAnswers.join(';').replace(/"/g, '""') :
-                    String(item.selectedAnswers).replace(/"/g, '""');
-                csvContent.push(`"${item.id}","${item.questionHash}","${escapedQuestion}","${escapedAnswers}",${item.isCorrect !== null ? item.isCorrect : ''},"${item.timestamp}"`);
-            });
-            chrome.runtime.sendMessage({ action: "downloadDB", csvData: csvContent.join('\n') });
-            window.sendLogToBackground(`📤 Подготовлено ${data.length} записей`);
-        };
-    } catch (error) {
-        window.sendLogToBackground("❌ Ошибка экспорта БД:", error);
-    }
-};
-
-// =====================================================================
-// === УМНАЯ НАВИГАЦИЯ ===
-// =====================================================================
-window.detectPageType = function() {
-    if (document.querySelector('.questionList') || document.querySelector('lib-quiz-page .questionList')) {
-        return 'results';
-    }
-    if (document.querySelector(window.selectors.questionTitle) && document.querySelector('.quiz-buttons-primary')) {
-        return 'test';
-    }
-    if (document.querySelector('.c-table-clickable-cell') || document.querySelector('.v-table-cell-content:first-child')) {
-        return 'variants';
-    }
-    if (document.querySelector('.v-button-caption')?.textContent?.includes('Скачать сертификат')) {
-        return 'certificate';
-    }
-    if (document.querySelector('.v-button-caption')?.textContent?.includes('Вернуться к обучению')) {
-        return 'return';
-    }
-    return 'unknown';
-};
-
-// =====================================================================
-// === ОБНАРУЖЕНИЕ ОШИБОК НА СТРАНИЦЕ ===
-// =====================================================================
-window.detectPageError = function() {
-    const errorPatterns = [
-        /500\s*(Internal\sServer\sError)/i,
-        /502\s*(Bad\sGateway)/i,
-        /503\s*(Service\sUnavailable)/i,
-        /504\s*(Gateway\sTimeout)/i,
-        /404\s*(Not\sFound)/i,
-        /Ошибка\sсервера/i,
-        /Server\sError/i,
-        /Service\sUnavailable/i,
-        /Технические\sработы/i,
-        /Временная\sнедоступность/i
-    ];
-    const pageText = document.body?.innerText || '';
-
-    for (const pattern of errorPatterns) {
-        if (pattern.test(pageText)) {
-            return true;
-        }
-    }
-
-    const hasQuestion = document.querySelector(window.selectors.questionTitle);
-    const hasButtons = document.querySelector('.quiz-buttons-primary');
-    const hasVariants = document.querySelector('.c-table-clickable-cell');
-    const hasResults = document.querySelector('.questionList');
-
-    if (!hasQuestion && !hasButtons && !hasVariants && !hasResults) {
-        const url = window.location.href;
-        if (url.includes('test') || url.includes('quiz') || url.includes('variant')) {
-            return true;
-        }
-    }
-
-    return false;
-};
-
-// =====================================================================
-// === АВТО-ПЕРЕЗАГРУЗКА ПРИ ОШИБКАХ ===
-// =====================================================================
-window.handlePageError = async function() {
-    if (window.currentMode !== 'auto_ai') {
-        window.sendLogToBackground("❌ Авто-перезагрузка только для режима auto_ai");
-        return false;
-    }
-    if (!window.isLocked || window.isStopped) {
-        window.sendLogToBackground("❌ Скрипт не активен");
-        return false;
-    }
-
-    const now = Date.now();
-
-    if (now - window.lastErrorTime < 5000) {
-        window.sendLogToBackground("⏳ Слишком рано для следующей перезагрузки");
-        return false;
-    }
-
-    if (window.currentReloadCount >= window.maxReloadAttempts) {
-        window.sendLogToBackground(`❌ Превышен лимит перезагрузок (${window.maxReloadAttempts})`);
-        window.sendLogToBackground("⚠️ Требуется ручное вмешательство");
-        window.setLoadingIndicator(true, false, "❌ Лимит перезагрузок исчерпан");
-        return false;
-    }
-
-    window.currentReloadCount++;
-    window.lastErrorTime = now;
-    window.errorDetected = true;
-
-    window.sendLogToBackground(`\n🔄 === ОБНАРУЖЕНА ОШИБКА ===`);
-    window.sendLogToBackground(`Попытка перезагрузки: ${window.currentReloadCount}/${window.maxReloadAttempts}`);
-    window.sendLogToBackground(`⏳ Перезагрузка через 5 секунд...`);
-
-    window.setLoadingIndicator(true, false, `🔄 Ошибка! Перезагрузка ${window.currentReloadCount}/${window.maxReloadAttempts} через 5 сек...`);
-
-    await chrome.storage.local.set({
-        shouldResumeAfterReload: true,
-        currentReloadCount: window.currentReloadCount,
-        maxReloadAttempts: window.maxReloadAttempts,
-        isLocked: true,
-        isStopped: false
-    });
-
-    await wait(5000);
-
-    if (window.isStopped) {
-        window.sendLogToBackground("⏹️ Перезагрузка отменена (скрипт остановлен)");
-        return false;
-    }
-
-    window.sendLogToBackground("🔄 Выполняем перезагрузку страницы...");
-    window.location.reload();
-
-    return true;
-};
-
-// =====================================================================
-// === СБРОС СЧЕТЧИКА ПЕРЕЗАГРУЗОК ===
-// =====================================================================
-window.resetReloadCounter = function() {
-    window.currentReloadCount = 0;
-    window.lastErrorTime = 0;
-    window.errorDetected = false;
-    chrome.storage.local.set({
-        currentReloadCount: 0,
-        shouldResumeAfterReload: false
-    });
-    window.sendLogToBackground("🔄 Счетчик перезагрузок сброшен");
-};
-
-// =====================================================================
-// === ОБРАБОТКА СТРАНИЦЫ ВАРИАНТОВ ===
-// =====================================================================
-window.handleTestVariantsPage = async function() {
-    if (window.isStopped || window.currentMode !== 'auto_ai') {
-        window.sendLogToBackground("⏹️ handleTestVariantsPage: остановлено");
-        return;
-    }
-    window.sendLogToBackground("🔄 Обработка вариантов...");
-    if (!window.globalObserver) {
-        window.globalObserver = new GlobalSelectorMutationObserver();
-    }
-
-    try {
-        window.sendLogToBackground("🔍 Поиск существующего незавершенного варианта...");
-
-        const existingCells = document.querySelectorAll('.c-table-clickable-cell');
-        let existingVariant = null;
-
-        for (const cell of existingCells) {
-            if (window.isStopped) return;
-            const text = cell.textContent?.trim() || "";
-            if (text.includes('- не завершен')) {
-                existingVariant = cell;
-                break;
-            }
-        }
-
-        if (existingVariant) {
-            window.sendLogToBackground(`✅ Найден существующий вариант: ${existingVariant.textContent.trim()}`);
-
-            window.isNavigatingToTest = true;
-
-            await chrome.storage.local.set({
-                shouldStartTestAutomatically: true,
-                modeToStart: window.currentMode,
-                delayMinToStart: window.delayMin,
-                delayMaxToStart: window.delayMax,
-                nextDelayMinToStart: window.nextDelayMin,
-                nextDelayMaxToStart: window.nextDelayMax,
-                isLocked: true,
-                isStopped: false,
-                modalVisible: true,
-                isNavigatingToTest: true
-            });
-
-            await simulateClick(existingVariant);
-            return;
-        }
-
-        window.sendLogToBackground("ℹ️ Незавершенных вариантов не найдено. Получаем новый...");
-
-        const allButtons = document.querySelectorAll('.v-button');
-        let buttonNewVariant = null;
-
-        for (const btn of allButtons) {
-            const text = btn.textContent?.trim() || "";
-            if (text.includes("Получить новый вариант")) {
-                buttonNewVariant = btn;
-                break;
-            }
-        }
-
-        if (buttonNewVariant) {
-            window.sendLogToBackground("✅ Найдена кнопка 'Получить новый вариант'");
-
-            window.isNavigatingToTest = true;
-
-            await simulateClick(buttonNewVariant);
-
-            if (window.isStopped) return;
-
-            window.sendLogToBackground("⏳ Ожидание появления нового варианта...");
-
-            const newVariantCell = await window.globalObserver.waitFor('.c-table-clickable-cell', {
-                text: '- не завершен',
-                timeout: 30000
-            });
-
-            if (window.isStopped) return;
-
-            window.sendLogToBackground(`✅ Новый вариант создан: ${newVariantCell.textContent.trim()}`);
-            await wait(1500);
-
-            if (window.isStopped) return;
-
-            await chrome.storage.local.set({
-                shouldStartTestAutomatically: true,
-                modeToStart: window.currentMode,
-                delayMinToStart: window.delayMin,
-                delayMaxToStart: window.delayMax,
-                nextDelayMinToStart: window.nextDelayMin,
-                nextDelayMaxToStart: window.nextDelayMax,
-                isLocked: true,
-                isStopped: false,
-                modalVisible: true,
-                isNavigatingToTest: true
-            });
-
-            await simulateClick(newVariantCell);
-            return;
-        } else {
-            window.sendLogToBackground("❌ Кнопка 'Получить новый вариант' не найдена и незавершенных вариантов нет.");
-            window.setLoadingIndicator(true, false, "Нет доступных вариантов");
-            window.stopScript(true);
-            return;
-        }
-
-    } catch (error) {
-        if (window.isStopped) return;
-        window.sendLogToBackground("❌ Ошибка обработки вариантов:", error.message);
-        window.setLoadingIndicator(true, false, "Ошибка навигации");
-    }
-};
-
-window.closeResultsModal = async function() {
-    if (window.isStopped || window.currentMode !== 'auto_ai') {
-        window.sendLogToBackground("⏹️ closeResultsModal: остановлено");
-        chrome.storage.local.remove('shouldCloseResultsModal');
-        return;
-    }
-    window.sendLogToBackground("🔄 Ожидание модального окна результатов...");
-    let attempts = 0;
-    const maxAttempts = 30;
-    let popup = null;
-    while (attempts < maxAttempts) {
-        if (window.isStopped) {
-            chrome.storage.local.remove('shouldCloseResultsModal');
-            return;
-        }
-        const popups = Array.from(document.querySelectorAll('.popupContent')).filter(el => el.innerText?.trim()?.length > 0);
-        if (popups.length > 0) {
-            popup = popups[popups.length - 1];
-            break;
-        }
-        await wait(500);
-        attempts++;
-    }
-    if (window.isStopped) {
-        chrome.storage.local.remove('shouldCloseResultsModal');
-        return;
-    }
-    if (!popup) {
-        window.sendLogToBackground("⚠️ Модальное окно не появилось");
-        chrome.storage.local.remove('shouldCloseResultsModal');
-        window.sendLogToBackground("🔄 Запускаем проверку результатов...");
-        window.checkTestResults();
-        return;
-    }
-    window.sendLogToBackground("✅ Модальное окно обнаружено");
-    const closeButton = popup.querySelector('.v-window-closebox:not(.v-window-closebox-disabled)');
-    if (closeButton) {
-        window.sendLogToBackground("🔘 Нажата кнопка закрытия ×");
-        await simulateClick(closeButton);
-        chrome.storage.local.remove('shouldCloseResultsModal');
-    } else if (popup.querySelector('.v-button') && !popup.querySelector('.v-button').textContent.endsWith('Назад')) {
-        const button = popup.querySelector('.v-button');
-        window.sendLogToBackground(`🔘 Кликаем: "${button.textContent?.trim()}"`);
-        await simulateClick(button);
-        chrome.storage.local.remove('shouldCloseResultsModal');
-    } else {
-        chrome.storage.local.remove('shouldCloseResultsModal');
-    }
-    setTimeout(() => {
-        window.sendLogToBackground("🔄 Переход к обработке вариантов...");
-        window.handleTestVariantsPage();
-    }, 1000);
-};
-
-// =====================================================================
-// === АВТОЗАПУСК ===
-// =====================================================================
-window.autoStartTestFlow = async function() {
-    window.sendLogToBackground("🚀 Автозапуск...");
-    window.isStopped = false;
-    window.isExecuting = false;
-    if (!window.globalObserver) {
-        window.globalObserver = new GlobalSelectorMutationObserver();
-    }
-    try {
-        window.sendLogToBackground("⏳ Ожидание загрузки страницы...");
-        await wait(3000);
-
-        let pageType = window.detectPageType();
-        let attempts = 0;
-        const maxAttempts = 2;
-
-        while (pageType === 'unknown' && attempts < maxAttempts) {
-            attempts++;
-            window.sendLogToBackground(`🔄 Повторная проверка типа страницы (${attempts}/${maxAttempts})...`);
-            await wait(1000);
-            pageType = window.detectPageType();
-        }
-
-        window.sendLogToBackground(`📍 Тип страницы: ${pageType}`);
-
-        if (pageType === 'results') {
-            window.sendLogToBackground("📊 Страница результатов — запускаем проверку и сохранение в БД...");
-            window.checkTestResults();
-            return;
-        }
-
-        if (pageType === 'unknown') {
-            const startButton = Array.from(document.querySelectorAll('button, .mdc-button, .v-button'))
-                .find(btn => btn.textContent?.trim() === 'Начать тестирование');
-            if (startButton) {
-                window.sendLogToBackground("✅ Кнопка 'Начать тестирование' найдена прямым поиском");
-                pageType = 'test_start';
-            } else {
-                const questionElement = document.querySelector(window.selectors.questionTitle);
-                if (questionElement) {
-                    window.sendLogToBackground("✅ Вопрос найден прямым поиском");
-                    pageType = 'test';
-                }
-            }
-        }
-
-        if (pageType === 'test_start') {
-            window.sendLogToBackground("📝 Страница старта теста - ищем кнопку начала...");
-
-            let startButton = null;
-            try {
-                startButton = await window.globalObserver.waitFor(
-                    '.quiz-buttons-primary .mdc-button__label',
-                    { text: 'Начать тестирование', timeout: 5000 }
-                );
-                if (startButton) {
-                    startButton = startButton.closest('button');
-                    window.sendLogToBackground("✅ Кнопка найдена, кликаем...");
-                    await simulateClick(startButton);
-                    await wait(2000);
-                }
-            } catch (e) {
-                window.sendLogToBackground("⚠️ Кнопка не найдена, пробуем продолжить...");
-            }
-
-            window.sendLogToBackground("⏳ Ожидание первого вопроса...");
-            const questionElement = await window.globalObserver.waitFor(window.selectors.questionTitle, {
-                add: true,
-                timeout: 5000
-            }).catch(() => null);
-
-            if (window.isStopped) {
-                window.sendLogToBackground("⏹️ Автозапуск остановлен");
-                return;
-            }
-
-            if (!questionElement) {
-                const questionElement2 = document.querySelector(window.selectors.questionTitle);
-                if (!questionElement2) {
-                    window.sendLogToBackground("⚠️ Вопрос не появился, но пробуем продолжить...");
-                    await wait(2000);
-                } else {
-                    window.sendLogToBackground("✅ Вопрос найден вручную");
-                }
-            } else {
-                window.sendLogToBackground(`✅ Вопрос: ${questionElement.textContent?.substring(0, 50)}...`);
-            }
-
-            await wait(2000);
-
-            if (window.isStopped) {
-                window.sendLogToBackground("⏹️ Автозапуск остановлен");
-                return;
-            }
-
-            const storedSettings = await chrome.storage.local.get([
-                'modeToStart', 'delayMinToStart', 'delayMaxToStart',
-                'nextDelayMinToStart', 'nextDelayMaxToStart'
-            ]);
-
-            if (storedSettings.modeToStart) window.currentMode = storedSettings.modeToStart;
-            if (storedSettings.delayMinToStart !== undefined) window.delayMin = storedSettings.delayMinToStart;
-            if (storedSettings.delayMaxToStart !== undefined) window.delayMax = storedSettings.delayMaxToStart;
-            if (storedSettings.nextDelayMinToStart !== undefined) window.nextDelayMin = storedSettings.nextDelayMinToStart;
-            if (storedSettings.nextDelayMaxToStart !== undefined) window.nextDelayMaxToStart = storedSettings.nextDelayMaxToStart;
-
-            window.sendLogToBackground(`🚀 Режим: ${window.currentMode}, Min=${window.delayMin}, Max=${window.delayMax}`);
-
-            if (window.isStopped) {
-                window.sendLogToBackground("⏹️ Автозапуск остановлен");
-                return;
-            }
-
-            if (window.currentMode === 'auto_ai') {
-                await window.executeAutoAIModeLogic();
-            } else if (window.currentMode === 'auto') {
-                await window.executeModeLogic();
-            } else {
-                window.sendLogToBackground("Ручной режим");
-                if (!window.questionObserver) {
-                    window.setupQuestionObserver();
-                }
-                setTimeout(() => window.handleNextQuestion(), 500);
-            }
-
-            window.sendLogToBackground("🧹 Очистка флагов");
-            chrome.storage.local.remove([
-                'shouldStartTestAutomatically', 'modeToStart',
-                'delayMinToStart', 'delayMaxToStart',
-                'nextDelayMinToStart', 'nextDelayMaxToStart'
-            ]);
-            return;
-        }
-
-        if (pageType === 'test') {
-            window.sendLogToBackground("📝 Страница теста...");
-
-            let startButtonInside = Array.from(document.querySelectorAll('button, .mdc-button, .v-button'))
-                .find(btn => btn.textContent?.trim() === 'Начать тестирование');
-
-            if (startButtonInside) {
-                window.sendLogToBackground("🔘 Нажимаем 'Начать тестирование' (внутри теста)...");
-                await simulateClick(startButtonInside);
-                await wait(2000);
-                setTimeout(window.autoStartTestFlow, 1000);
-                return;
-            }
-
-            const storedSettings = await chrome.storage.local.get([
-                'modeToStart', 'delayMinToStart', 'delayMaxToStart',
-                'nextDelayMinToStart', 'nextDelayMaxToStart'
-            ]);
-
-            if (storedSettings.modeToStart) window.currentMode = storedSettings.modeToStart;
-            if (storedSettings.delayMinToStart !== undefined) window.delayMin = storedSettings.delayMinToStart;
-            if (storedSettings.delayMaxToStart !== undefined) window.delayMax = storedSettings.delayMaxToStart;
-            if (storedSettings.nextDelayMinToStart !== undefined) window.nextDelayMin = storedSettings.nextDelayMinToStart;
-            if (storedSettings.nextDelayMaxToStart !== undefined) window.nextDelayMaxToStart = storedSettings.nextDelayMaxToStart;
-
-            window.sendLogToBackground(`🚀 Режим: ${window.currentMode}, Min=${window.delayMin}, Max=${window.delayMax}`);
-
-            window.isNavigatingToTest = false;
-            chrome.storage.local.remove(['isNavigatingToTest']);
-
-            if (window.currentMode === 'auto_ai') {
-                await window.executeAutoAIModeLogic();
-            } else if (window.currentMode === 'auto') {
-                await window.executeModeLogic();
-            } else {
-                window.sendLogToBackground("Ручной режим");
-                if (!window.questionObserver) {
-                    window.setupQuestionObserver();
-                }
-                setTimeout(() => window.handleNextQuestion(), 500);
-            }
-
-            chrome.storage.local.remove([
-                'shouldStartTestAutomatically', 'modeToStart',
-                'delayMinToStart', 'delayMaxToStart',
-                'nextDelayMinToStart', 'nextDelayMaxToStart'
-            ]);
-            return;
-        }
-
-        if (pageType === 'variants') {
-            window.sendLogToBackground("📋 Страница вариантов - открываем тест...");
-            await window.handleTestVariantsPage();
-            return;
-        }
-
-        if (pageType === 'certificate' || pageType === 'return') {
-            window.sendLogToBackground("↩️ Страница завершения - возвращаемся...");
-            const backButton = document.querySelector('.v-button-blue-button.v-button-icon-align-right');
-            if (backButton) {
-                await simulateClick(backButton);
-                await wait(2000);
-                if (window.isStopped) return;
-                window.autoStartTestFlow();
-                return;
-            }
-        }
-
-        window.sendLogToBackground("⚠️ Страница не определена, пробуем найти варианты...");
-        const variantCell = document.querySelector('.c-table-clickable-cell');
-        if (variantCell) {
-            await window.handleTestVariantsPage();
-            return;
-        }
-
-        window.sendLogToBackground("❌ Не удалось определить где мы находимся");
-        window.sendLogToBackground(`📄 URL: ${window.location.href}`);
-        window.setLoadingIndicator(true, false, "Не удалось определить страницу");
-
-    } catch (error) {
-        window.sendLogToBackground("❌ Ошибка автозапуска:", error.message);
-        window.setLoadingIndicator(true, false, "Ошибка: " + error.message);
-    }
-};
-
-// =====================================================================
-// === ОСНОВНЫЕ ФУНКЦИИ ===
-// =====================================================================
-window.clickConfirmDialogButton = async function() {
-    window.sendLogToBackground("⏳ Ожидание диалогового окна подтверждения...");
-    await wait(1500);
-    const confirmButton = document.querySelector('mat-dialog-actions button:last-child');
-    if (confirmButton) {
-        const confirmLabel = confirmButton.querySelector('.mdc-button__label');
-        if (confirmLabel && confirmLabel.textContent.trim() === "Да") {
-            window.sendLogToBackground("✅ Нажата кнопка 'Да' в диалоговом окне");
-            confirmButton.click();
-            window.sendLogToBackground("⏳ Переход на страницу результатов... Запуск проверки через 3 сек.");
-
-            setTimeout(() => {
-                if (!window.isStopped) {
-                    window.checkTestResults();
-                } else {
-                    window.sendLogToBackground("⚠️ Скрипт был остановлен во время ожидания результатов.");
-                }
-            }, 3000);
-        } else {
-            window.sendLogToBackground("⚠️ Кнопка 'Да' не найдена или текст не совпадает.");
-        }
-    } else {
-        window.sendLogToBackground("⚠️ Диалоговое окно не найдено.");
-        setTimeout(() => {
-            if (!window.isStopped) window.checkTestResults();
-        }, 2000);
-    }
-};
-
-window.setupQuestionObserver = function() {
-    const questionTitleElement = document.querySelector(window.selectors.questionTitle);
-    if (!questionTitleElement) {
-        window.sendLogToBackground("⚠️ Не найден элемент с вопросом");
-        return;
-    }
-    if (window.questionObserver) window.questionObserver.disconnect();
-    const observer = new MutationObserver(async (mutations) => {
-        if (window.isStopped || window.isExecuting) return;
-
-        const currentQuestionText = questionTitleElement.textContent?.trim();
-        if (!currentQuestionText) return;
-
-        window.sendLogToBackground("📝 Обнаружено изменение вопроса:", currentQuestionText);
-
-        if (!window.isStopped) {
-            window.setLoadingIndicator(true);
-            try {
-                const result = await window.fetchAnswers(window.normalizeQuestionText(currentQuestionText));
-
-                if (window.isStopped) return;
-
-                if (result?.length) {
-                    const answers = Array.from(document.getElementsByClassName('question-inner-html-text'));
-                    if (answers.length) {
-                        if (window.currentMode === 'auto') {
-                            window.executeModeLogic();
-                        } else if (window.currentMode === 'auto_ai') {
-                            window.executeAutoAIModeLogic();
-                        } else {
-                            window.highlightCorrectAnswersManual(result, answers);
-                        }
-                    }
-                } else {
-                    window.setLoadingIndicator(true, false, "Нет ответов");
-                }
-            } catch (error) {
-                window.sendLogToBackground("❌ Ошибка запроса:", error);
-                window.setLoadingIndicator(true, false, "Ошибка запроса");
-            } finally {
-                window.setLoadingIndicator(false);
-            }
-        }
-    });
-
-    observer.observe(questionTitleElement, { characterData: true, childList: true, subtree: true });
-    window.questionObserver = observer;
-    window.sendLogToBackground("👁️ Question observer запущен");
-};
-
-// ✅ ИСПРАВЛЕННАЯ ФУНКЦИЯ ОСТАНОВКИ
-window.stopScript = function(forceUnlock = false, forceStop = false) {
-    if (!forceStop) {
-        if (window.isFinishingTest && window.currentMode === 'auto_ai') {
-            window.sendLogToBackground("⏸️ Не останавливаем - завершение теста в auto_ai");
-            return;
-        }
-        if (window.isReturningToLearning) {
-            window.sendLogToBackground("⏸️ Возврат к обучению - не останавливаем");
-            return;
-        }
-        if (window.isNavigatingToTest && window.currentMode === 'auto_ai') {
-            window.sendLogToBackground("⏸️ Навигация к тесту - не останавливаем");
-            return;
-        }
-        if (window.checkResultsInterval) {
-            window.sendLogToBackground("⏸️ Идет проверка результатов - не останавливаем");
-            return;
-        }
-    }
-    window.sendLogToBackground("⏹️ Остановка скрипта...");
-    window.isStopped = true;
-    if (forceUnlock === true) window.isLocked = false;
-
-    // ✅ СБРОС СЧЕТЧИКА ПЕРЕЗАГРУЗОК
-    window.resetReloadCounter();
-
-    window.timeoutIds.forEach(id => clearTimeout(id));
-    window.timeoutIds = [];
-
-    if (window.checkResultsInterval) {
-        clearInterval(window.checkResultsInterval);
-        window.checkResultsInterval = null;
-    }
-
-    if (window.fetchPromise) {
-        window.abortController.abort();
-        window.fetchPromise = null;
-        window.abortController = new AbortController();
-    }
-
-    if (window.questionObserver) {
-        window.questionObserver.disconnect();
-        window.questionObserver = null;
-    }
-
-    if (window.globalObserver) {
-        window.globalObserver.rejectAllWait('stopped by user');
-        window.globalObserver.disconnect();
-        window.globalObserver = null;
-    }
-
-    window.isExecuting = false;
-    window.isNavigatingToTest = false;
-
-    chrome.storage.local.remove([
-        'shouldStartTestAutomatically', 'modeToStart',
-        'delayMinToStart', 'delayMaxToStart',
-        'nextDelayMinToStart', 'nextDelayMaxToStart',
-        'shouldCloseResultsModal', 'isNavigatingToTest'
-    ]);
-
-    chrome.storage.local.set({
-        isStopped: true,
-        isLocked: window.isLocked,
-        emptyResponsesCount: 0,
-        modalVisible: false
-    });
-
-    const modalHost = document.getElementById(window.selectors.modalHostId);
-    if (modalHost) {
-        window.updateModalButtonState(window.isLocked);
-        window.setAIButtonState(window.isLocked);
-    }
-
-    window.sendLogToBackground(`✅ Скрипт остановлен. Блокировка: ${window.isLocked}`);
-};
-
-window.getRandomDelaySeconds = function(min, max) {
-    if (min > max) return min;
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-};
-
-// =====================================================================
-// === АВТОМАТИЧЕСКИЙ РЕЖИМ (Render) ===
-// =====================================================================
-window.executeModeLogic = async function() {
-    if (window.currentMode === 'manual' || window.isExecuting || window.isStopped) {
-        window.sendLogToBackground("executeModeLogic: уже выполняется или остановлен");
-        return;
-    }
-    window.isExecuting = true;
-    try {
-        const questionElements = document.getElementsByClassName('question-title-text');
-        if (!questionElements.length) { window.isExecuting = false; return; }
-        const currentQuestionText = questionElements[0].textContent?.trim();
-        const answers = document.getElementsByClassName('question-inner-html-text');
-        if (!answers.length) { window.isExecuting = false; return; }
-        if (window.isStopped) { window.isExecuting = false; return; }
-
-        const result = await window.fetchAnswers(window.normalizeQuestionText(currentQuestionText));
-
-        if (window.isStopped) { window.isExecuting = false; return; }
-
-        if (!result?.length) {
-            window.emptyResponsesCount++;
-            window.sendLogToBackground(`⚠️ Пустой ответ. Счетчик: ${window.emptyResponsesCount}`);
-            if (window.emptyResponsesCount >= 4) {
-                window.setLoadingIndicator(true, false, "Нет ответов");
-                window.stopScript(true);
-                return;
-            }
-            const nextButton = window.findButtonByText("Следующий вопрос");
-            if (nextButton) {
-                nextButton.click();
-                setTimeout(window.executeModeLogic, 500);
-            }
-            window.isExecuting = false;
-            return;
-        }
-
-        window.emptyResponsesCount = 0;
-        const clickedAnswers = new Set();
-        const answerTextsToSelect = [];
-
-        for (const answer of answers) {
-            const answerText = answer.textContent?.trim();
-            if (result.some(r => window.normalizeText(r) === window.normalizeText(answerText))) {
-                answerTextsToSelect.push(answerText);
-            }
-        }
-
-        const answerDelays = [];
-        for (let i = 0; i < answerTextsToSelect.length; i++) {
-            answerDelays.push(window.getRandomDelaySeconds(window.delayMin, window.delayMax));
-        }
-        const nextQuestionDelay = window.getRandomDelaySeconds(window.nextDelayMin, window.nextDelayMax);
-        const totalDelaySeconds = answerDelays.reduce((sum, delay) => sum + delay, 0) + nextQuestionDelay;
-        window.currentTotalDelay = totalDelaySeconds;
-
-        window.sendLogToBackground(`🎯 ОТВЕТОВ: ${answerTextsToSelect.length}, ВРЕМЯ: ${totalDelaySeconds} сек`);
-        if (totalDelaySeconds > 0) window.setLoadingIndicator(true, true, null, totalDelaySeconds);
-
-        for (let i = 0; i < answerTextsToSelect.length; i++) {
-            if (window.isStopped) { window.isExecuting = false; window.setLoadingIndicator(false); return; }
-            const answerText = answerTextsToSelect[i];
-            let answerElement = null;
-            const currentAnswerElements = document.getElementsByClassName('question-inner-html-text');
-
-            for (const el of currentAnswerElements) {
-                if (el.textContent?.trim() === answerText) { answerElement = el; break; }
-            }
-            if (!answerElement) continue;
-
-            const listItem = answerElement.closest('mat-list-item') || answerElement.closest('.mat-mdc-list-item') || answerElement.closest('mat-radio-button') || answerElement.closest('.mat-mdc-radio-button');
-            if (!listItem) continue;
-
-            const radioButton = listItem.querySelector('mat-radio-button') || listItem.querySelector('.mat-mdc-radio-button') || listItem;
-            const checkbox = listItem.querySelector('mat-checkbox') || listItem.querySelector('.mat-mdc-checkbox');
-
-            if (radioButton && (radioButton.classList.contains('mat-radio-checked') || radioButton.querySelector('input[type="radio"]:checked'))) continue;
-            else if (checkbox) {
-                const input = checkbox.querySelector('input[type="checkbox"]');
-                if (input && input.checked) continue;
-            }
-
-            if (!clickedAnswers.has(answerText)) {
-                const randomDelay = answerDelays[i];
-                await new Promise(resolve => {
-                    const timeoutId = setTimeout(resolve, randomDelay * 1000);
-                    window.timeoutIds.push(timeoutId);
-                });
-
-                if (window.isStopped) { window.isExecuting = false; window.setLoadingIndicator(false); return; }
-
-                if (radioButton && (radioButton.classList.contains('mat-radio-button') || radioButton.classList.contains('mat-mdc-radio-button'))) {
-                    const radioInput = radioButton.querySelector('input[type="radio"]') || radioButton.querySelector('.mdc-radio__native-control') || radioButton.querySelector('.mat-radio-container') || radioButton;
-                    if (radioInput) await simulateClick(radioInput);
-                    else await simulateClick(radioButton);
-                } else if (checkbox) {
-                    const checkboxInput = checkbox.querySelector('input[type="checkbox"]') || checkbox.querySelector('.mdc-checkbox__native-control');
-                    if (checkboxInput) await simulateClick(checkboxInput);
-                    else await simulateClick(checkbox);
-                } else {
-                    await simulateClick(answerElement);
-                }
-                clickedAnswers.add(answerText);
-            }
-        }
-
-        if (window.isStopped) { window.isExecuting = false; window.setLoadingIndicator(false); return; }
-
-        await new Promise(resolve => {
-            const timeoutId = setTimeout(resolve, nextQuestionDelay * 1000);
-            window.timeoutIds.push(timeoutId);
-        });
-
-        if (window.isStopped) { window.isExecuting = false; window.setLoadingIndicator(false); return; }
-
-        window.setLoadingIndicator(false);
-        const nextButton = window.findButtonByText("Следующий вопрос");
-        if (nextButton) {
-            await simulateClick(nextButton);
-            if (!window.isStopped) setTimeout(window.executeModeLogic, 800);
-        } else {
-            window.sendLogToBackground("⚠️ Не найдена кнопка 'Следующий вопрос'");
-            window.stopScript(true);
-        }
-    } catch (error) {
-        window.sendLogToBackground("❌ Ошибка в executeModeLogic:", error.message);
-        window.setLoadingIndicator(false);
-    } finally {
-        window.isExecuting = false;
-    }
-};
-
-// =====================================================================
-// === АВТОПОДБОР С ИИ (Mistral + БД) ===
-// =====================================================================
-window.executeAutoAIModeLogic = async function() {
-    if (window.isExecuting || window.isStopped) {
-        window.sendLogToBackground("executeAutoAIModeLogic: уже выполняется или остановлен");
-        return;
-    }
-    window.isExecuting = true;
-    try {
-        const questionElements = document.getElementsByClassName('question-title-text');
-        if (!questionElements.length) { window.isExecuting = false; return; }
-        const currentQuestionText = questionElements[0].textContent?.trim();
-        const answers = document.getElementsByClassName('question-inner-html-text');
-        if (!answers.length) { window.isExecuting = false; return; }
-        if (window.isStopped) { window.isExecuting = false; return; }
-
-        // ✅ ПРОВЕРКА НА ОШИБКИ СТРАНИЦЫ
-        if (window.detectPageError()) {
-            window.sendLogToBackground("⚠️ Обнаружена ошибка на странице!");
-            window.isExecuting = false;
-            await window.handlePageError();
-            return;
-        }
-
-        window.sendLogToBackground(`\n📝 === ВОПРОС ===`);
-        window.sendLogToBackground(`Текст: "${currentQuestionText}"`);
-
-        await window.initDatabase();
-        const dbRecords = await window.findQuestionInDB(currentQuestionText);
-        const correctCount = dbRecords.filter(r => r.isCorrect === true).length;
-        const incorrectCount = dbRecords.filter(r => r.isCorrect === false).length;
-        const nullCount = dbRecords.filter(r => r.isCorrect === null).length;
-
-        window.sendLogToBackground(`📊 Статистика БД: Верно=${correctCount}, Неверно=${incorrectCount}, Неизвестно=${nullCount}`);
-
-        const correctRecords = dbRecords.filter(record =>
-            record.isCorrect === true &&
-            record.selectedAnswers &&
-            Array.isArray(record.selectedAnswers) &&
-            record.selectedAnswers.length > 0
-        );
-
-        let aiAnswers = [];
-        if (correctRecords.length > 0) {
-            window.sendLogToBackground(`✅ Найдено ${correctRecords.length} правильных комбинаций в БД`);
-            const pageOptions = window.getAnswerOptionsFromPage();
-            if (pageOptions && pageOptions.length > 0) {
-                let foundMatch = false;
-                for (const correctRecord of correctRecords) {
-                    const recordAnswers = correctRecord.selectedAnswers;
-                    const allAnswersOnPage = recordAnswers.every(ans =>
-                        pageOptions.some(pageAns => window.normalizeText(ans) === window.normalizeText(pageAns))
-                    );
-                    if (allAnswersOnPage) {
-                        window.sendLogToBackground(`✅ Найдена подходящая комбинация: [${recordAnswers.join('; ')}]`);
-                        aiAnswers = recordAnswers;
-                        foundMatch = true;
-                        break;
-                    }
-                }
-                if (!foundMatch) {
-                    window.sendLogToBackground(`⚠️ Ни одна известная комбинация не подходит для текущих вариантов`);
-                }
-            } else {
-                window.sendLogToBackground(`⚠️ Не удалось получить варианты со страницы, используем первую комбинацию`);
-                aiAnswers = correctRecords[0].selectedAnswers;
-            }
-        }
-
-        if (!aiAnswers || aiAnswers.length === 0) {
-            let incorrectCombinations = [];
-            if (dbRecords.length > 0) {
-                incorrectCombinations = dbRecords
-                    .filter(record =>
-                        record.isCorrect === false &&
-                        record.selectedAnswers &&
-                        Array.isArray(record.selectedAnswers) &&
-                        record.selectedAnswers.length > 0
-                    )
-                    .map(record => {
-                        return [...record.selectedAnswers].sort((a, b) =>
-                            window.normalizeText(a).localeCompare(window.normalizeText(b))
-                        );
-                    });
-
-                const uniqueIncorrect = [];
-                const seen = new Set();
-                for (const comb of incorrectCombinations) {
-                    const key = comb.map(a => window.normalizeText(a)).sort().join('|');
-                    if (!seen.has(key)) {
-                        seen.add(key);
-                        uniqueIncorrect.push(comb);
-                    }
-                }
-                incorrectCombinations = uniqueIncorrect;
-
-                if (incorrectCombinations.length > 0) {
-                    window.sendLogToBackground(`⚠️ ИЗВЕСТНЫЕ НЕВЕРНЫЕ ПОПЫТКИ (${incorrectCombinations.length}):`);
-                    incorrectCombinations.forEach((comb, idx) => {
-                        window.sendLogToBackground(`${idx + 1}. [${comb.join('; ')}]`);
-                    });
-                } else {
-                    const nullRecordsCount = dbRecords.filter(r => r.isCorrect === null).length;
-                    if (nullRecordsCount > 0) {
-                        window.sendLogToBackground(`ℹ️ Найдено ${nullRecordsCount} записей со статусом 'неизвестно'`);
-                    } else {
-                        window.sendLogToBackground(`🆕 Вопрос не найден в БД (чистый лист)`);
-                    }
-                }
-            }
-
-            const questionType = window.getQuestionTypeFromPage();
-            const isMultipleChoice = questionType?.includes("НЕСКОЛЬКО");
-            const answerOptions = window.getAnswerOptionsFromPage();
-
-            if (!answerOptions || !answerOptions.length) {
-                window.sendLogToBackground("⚠️ Не найдены варианты ответов на странице");
-                window.setLoadingIndicator(true, false, "Нет вариантов");
-                window.isExecuting = false;
-                return;
-            }
-
-            window.sendLogToBackground(`\n📋 ВАРИАНТЫ ОТВЕТОВ НА СТРАНИЦЕ (${answerOptions.length}):`);
-            answerOptions.forEach((opt, idx) => {
-                window.sendLogToBackground(`${idx + 1}. "${opt}"`);
-            });
-
-            window.setLoadingIndicator(true);
-            window.sendLogToBackground(`\n🤖 ОТПРАВКА ЗАПРОСА К ИИ...`);
-            window.sendLogToBackground(`Тип вопроса: ${isMultipleChoice ? 'НЕСКОЛЬКО' : 'ОДИН'}`);
-            window.sendLogToBackground(`Передано неверных комбинаций: ${incorrectCombinations.length}`);
-
-            aiAnswers = await window.askAIWithIncorrectCombinations(
-                currentQuestionText,
-                answerOptions,
-                isMultipleChoice,
-                incorrectCombinations
-            );
-
-            if (window.isStopped) {
-                window.isExecuting = false;
-                window.setLoadingIndicator(false);
-                return;
-            }
-
-            if (!aiAnswers?.length) {
-                window.sendLogToBackground("❌ ИИ не смог предложить новый вариант");
-                window.setLoadingIndicator(true, false, "ИИ исчерпал варианты");
-                const nextButton = window.findButtonByText("Следующий вопрос");
-                if (nextButton) {
-                    nextButton.click();
-                    setTimeout(window.executeAutoAIModeLogic, 500);
-                }
-                window.isExecuting = false;
-                return;
-            }
-
-            window.sendLogToBackground(`\n💬 ОТВЕТ ОТ ИИ:`);
-            window.sendLogToBackground(`Варианты: [${aiAnswers.join('; ')}]`);
-            window.sendLogToBackground(`Количество: ${aiAnswers.length}`);
-
-            // ✅ СОХРАНЯЕМ В БД ТОЛЬКО ЕСЛИ РЕЖИМ auto_ai
-            if (window.currentMode === 'auto_ai' && aiAnswers && Array.isArray(aiAnswers) && aiAnswers.length > 0) {
-                window.sendLogToBackground(`💾 Сохраняем новую попытку в БД (статус неизвестен)`);
-                await window.saveQuestionToDB(currentQuestionText, aiAnswers, null);
-            }
-        }
-
-        window.sendLogToBackground(`\n🎯 ВЫБОР ОТВЕТОВ:`);
-        window.sendLogToBackground(`Выбрано ответов: ${aiAnswers.length}`);
-        aiAnswers.forEach((ans, idx) => {
-            window.sendLogToBackground(`${idx + 1}. "${ans}"`);
-        });
-
-        if (!aiAnswers || !Array.isArray(aiAnswers) || aiAnswers.length === 0) {
-            window.sendLogToBackground("⚠️ Нет ответов для выбора, переходим к следующему вопросу");
-            const nextButton = window.findButtonByText("Следующий вопрос");
-            if (nextButton) {
-                await simulateClick(nextButton);
-                setTimeout(window.executeAutoAIModeLogic, 500);
-            }
-            window.isExecuting = false;
-            return;
-        }
-
-        const clickedAnswers = new Set();
-        const answerDelays = [];
-        for (let i = 0; i < aiAnswers.length; i++) {
-            answerDelays.push(window.getRandomDelaySeconds(window.delayMin, window.delayMax));
-        }
-        const nextQuestionDelay = window.getRandomDelaySeconds(window.nextDelayMin, window.nextDelayMax);
-        const totalDelaySeconds = answerDelays.reduce((sum, delay) => sum + delay, 0) + nextQuestionDelay;
-        window.currentTotalDelay = totalDelaySeconds;
-        window.sendLogToBackground(`⏱️ Время: ${totalDelaySeconds} сек`);
-
-        if (totalDelaySeconds > 0) window.setLoadingIndicator(true, true, null, totalDelaySeconds);
-
-        for (let i = 0; i < aiAnswers.length; i++) {
-            if (window.isStopped) { window.isExecuting = false; window.setLoadingIndicator(false); return; }
-            const aiAnswerText = aiAnswers[i];
-            let answerElement = null;
-            const currentAnswerElements = document.getElementsByClassName('question-inner-html-text');
-
-            for (const el of currentAnswerElements) {
-                if (el.textContent?.trim() === aiAnswerText) { answerElement = el; break; }
-            }
-            if (!answerElement) continue;
-
-            const listItem = answerElement.closest('mat-list-item') || answerElement.closest('.mat-mdc-list-item') || answerElement.closest('mat-radio-button') || answerElement.closest('.mat-mdc-radio-button');
-            if (!listItem) continue;
-
-            const radioButton = listItem.querySelector('mat-radio-button') || listItem.querySelector('.mat-mdc-radio-button') || listItem;
-            const checkbox = listItem.querySelector('mat-checkbox') || listItem.querySelector('.mat-mdc-checkbox');
-
-            if (radioButton && (radioButton.classList.contains('mat-radio-checked') || radioButton.querySelector('input[type="radio"]:checked'))) continue;
-            else if (checkbox) {
-                const input = checkbox.querySelector('input[type="checkbox"]');
-                if (input && input.checked) continue;
-            }
-
-            if (!clickedAnswers.has(aiAnswerText)) {
-                const randomDelay = answerDelays[i];
-                await new Promise(resolve => {
-                    const timeoutId = setTimeout(resolve, randomDelay * 1000);
-                    window.timeoutIds.push(timeoutId);
-                });
-
-                if (window.isStopped) { window.isExecuting = false; window.setLoadingIndicator(false); return; }
-
-                window.sendLogToBackground(`👆 КЛИК #${i + 1}: "${aiAnswerText}" (задержка: ${randomDelay} сек)`);
-
-                if (radioButton && (radioButton.classList.contains('mat-radio-button') || radioButton.classList.contains('mat-mdc-radio-button'))) {
-                    const radioInput = radioButton.querySelector('input[type="radio"]') || radioButton.querySelector('.mdc-radio__native-control') || radioButton.querySelector('.mat-radio-container') || radioButton;
-                    if (radioInput) await simulateClick(radioInput);
-                    else await simulateClick(radioButton);
-                } else if (checkbox) {
-                    const checkboxInput = checkbox.querySelector('input[type="checkbox"]') || checkbox.querySelector('.mdc-checkbox__native-control');
-                    if (checkboxInput) await simulateClick(checkboxInput);
-                    else await simulateClick(checkbox);
-                } else {
-                    await simulateClick(answerElement);
-                }
-                clickedAnswers.add(aiAnswerText);
-            }
-        }
-
-        if (window.isStopped) { window.isExecuting = false; window.setLoadingIndicator(false); return; }
-
-        await new Promise(resolve => {
-            const timeoutId = setTimeout(resolve, nextQuestionDelay * 1000);
-            window.timeoutIds.push(timeoutId);
-        });
-
-        if (window.isStopped) { window.isExecuting = false; window.setLoadingIndicator(false); return; }
-
-        window.setLoadingIndicator(false);
-        const finishButton = window.findButtonByText("Завершить тестирование");
-        const nextButton = window.findButtonByText("Следующий вопрос");
-
-        if (finishButton) {
-            window.sendLogToBackground("🏁 Найдена кнопка 'Завершить тестирование'");
-            window.isFinishingTest = true;
-            await simulateClick(finishButton);
-            setTimeout(() => { window.clickConfirmDialogButton(); }, 1000);
-        } else if (nextButton) {
-            window.sendLogToBackground("➡️ Переход к следующему вопросу");
-            await simulateClick(nextButton);
-            if (!window.isStopped) setTimeout(window.executeAutoAIModeLogic, 800);
-        } else {
-            window.sendLogToBackground("⚠️ Не найдены кнопки навигации");
-            window.stopScript(true);
-        }
-    } catch (error) {
-        window.sendLogToBackground("❌ Ошибка в executeAutoAIModeLogic:", error.message);
-        window.setLoadingIndicator(false);
-    } finally {
-        window.isExecuting = false;
-    }
-};
-
 // =====================================================================
 // === ПРОВЕРКА РЕЗУЛЬТАТОВ ТЕСТА И ОЦЕНКИ ===
 // =====================================================================
@@ -1433,6 +223,7 @@ window.checkTestResults = async function() {
     window.sendLogToBackground("📊 Проверка результатов и оценки...");
     let attempts = 0;
     const maxAttempts = 30;
+    
     if (window.checkResultsInterval) {
         clearInterval(window.checkResultsInterval);
         window.checkResultsInterval = null;
@@ -1479,7 +270,6 @@ window.checkTestResults = async function() {
 
                     const dbRecords = await window.findQuestionInDB(questionText);
 
-                    // ✅ СОХРАНЯЕМ В БД ТОЛЬКО ЕСЛИ РЕЖИМ auto_ai
                     if (window.currentMode !== 'auto_ai') {
                         window.sendLogToBackground(`ℹ️ Пропуск сохранения (режим: ${window.currentMode})`);
                         processedCount++;
@@ -1501,17 +291,33 @@ window.checkTestResults = async function() {
                         const normalizedDb = record.selectedAnswers.map(a => window.normalizeText(a)).sort();
                         const normalizedPage = selectedAnswersFromPage.map(a => window.normalizeText(a)).sort();
 
-                        if (normalizedDb.length === normalizedPage.length &&
+                        if (normalizedDb.length === normalizedPage.length && 
                             normalizedDb.every((val, i) => val === normalizedPage[i])) {
 
                             matchFound = true;
+                            
+                            // ✅ ПРОВЕРКА: есть ли id у записи
+                            if (!record.id) {
+                                window.sendLogToBackground(`⚠️ У записи нет id, пропускаем обновление: ${questionText.substring(0, 50)}...`);
+                                break;
+                            }
+                            
                             if (record.isCorrect !== isCorrectFromPage) {
                                 window.sendLogToBackground(`🔄 Обновление #${record.id}: ${record.isCorrect} → ${isCorrectFromPage}`);
+                                
+                                // ✅ Обновляем локально
                                 const transaction = window.db.transaction(['questions'], 'readwrite');
                                 const store = transaction.objectStore('questions');
                                 record.isCorrect = isCorrectFromPage;
                                 store.put(record);
                                 updatedCount++;
+                                
+                                // ✅ ОТПРАВЛЯЕМ ЗАПРОС НА ОБНОВЛЕНИЕ НА СЕРВЕР
+                                try {
+                                    await window.updateAnswerStatusOnServer(record.id, isCorrectFromPage);
+                                } catch (error) {
+                                    window.sendLogToBackground(`❌ Ошибка обновления на сервере #${record.id}: ${error.message}`);
+                                }
                             }
                             break;
                         }
@@ -1524,7 +330,7 @@ window.checkTestResults = async function() {
                     }
                     processedCount++;
                 } catch (e) {
-                    window.sendLogToBackground("⚠️ Ошибка:", e);
+                    window.sendLogToBackground("⚠️ Ошибка обработки вопроса:", e);
                 }
             });
 
@@ -1544,6 +350,7 @@ window.checkTestResults = async function() {
 window.tryFinishTestFlow = async function() {
     const gradeIndicators = document.querySelectorAll('lib-status-indicator, .status-indicator, .quiz-info-col-indicators');
     let currentGrade = 0;
+    
     for (const indicator of gradeIndicators) {
         const text = indicator.textContent || indicator.innerText;
         const match = text.match(/Оценка\s*[:\s](\d+)/i) || text.match(/(\d+)\sбалл/i);
@@ -1562,20 +369,19 @@ window.tryFinishTestFlow = async function() {
             }
         }
     }
+    
     if (currentGrade > 0) {
         window.sendLogToBackground(`🎯 Получена оценка: ${currentGrade}`);
         const storedData = await new Promise(resolve => chrome.storage.local.get(['targetGrade'], resolve));
         const targetGrade = storedData.targetGrade || window.targetGrade || 5;
         window.sendLogToBackground(`🎯 Целевая оценка: ${targetGrade}`);
-
+        
         if (currentGrade >= targetGrade) {
             window.sendLogToBackground(`🎉 Цель достигнута! (${currentGrade} >= ${targetGrade})`);
             window.isStopped = true;
             window.isLocked = false;
-
-            // ✅ СБРОС СЧЕТЧИКА ПЕРЕЗАГРУЗОК ПРИ УСПЕХЕ
             window.resetReloadCounter();
-
+            
             const modalHost = document.getElementById(window.selectors.modalHostId);
             if (modalHost) {
                 window.updateModalButtonState(false);
@@ -1590,14 +396,13 @@ window.tryFinishTestFlow = async function() {
             }, 500);
         } else {
             window.sendLogToBackground(`⚠️ Оценка ${currentGrade} < ${targetGrade}. Запуск повторной попытки...`);
-
             const returnButton = document.querySelector('button.quiz-buttons-primary, .v-button-blue-button');
             if (returnButton && (returnButton.textContent.includes('Вернуться') || returnButton.textContent.includes('Попробовать'))) {
                 window.isReturningToLearning = true;
                 chrome.storage.local.set({ shouldCloseResultsModal: true });
                 await window.simulateClick(returnButton);
             } else {
-                window.sendLogToBackground("⚠️ Кнопка возврата не найдена, пытаемся найти любую кнопку возврата");
+                window.sendLogToBackground("⚠️ Кнопка возврата не найдена");
                 const anyReturnBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Вернуться'));
                 if (anyReturnBtn) {
                     await window.simulateClick(anyReturnBtn);
@@ -1607,7 +412,7 @@ window.tryFinishTestFlow = async function() {
             }
         }
     } else {
-        window.sendLogToBackground("⚠️ Не удалось автоматически определить оценку. Пробуем вернуться вручную или стоп.");
+        window.sendLogToBackground("⚠️ Не удалось автоматически определить оценку");
         const returnButton = document.querySelector('button.quiz-buttons-primary, .v-button-blue-button');
         if (returnButton && returnButton.textContent.includes('Вернуться')) {
             window.isReturningToLearning = true;
@@ -1655,19 +460,16 @@ if (!window.messageListenerSet) {
                     window.nextDelayMin = request.nextDelayMin ?? 2;
                     window.nextDelayMax = request.nextDelayMax ?? 5;
                 }
-
                 chrome.storage.local.get(['targetGrade'], (res) => {
                     window.targetGrade = res.targetGrade || 5;
                     window.sendLogToBackground(`🎯 Целевая оценка: ${window.targetGrade}`);
                 });
-
                 window.emptyResponsesCount = 0;
                 if (window.fetchPromise) {
                     window.abortController.abort();
                     window.fetchPromise = null;
                 }
                 window.abortController = new AbortController();
-
                 chrome.storage.local.set({
                     isStopped: false,
                     isLocked: true,
@@ -1678,11 +480,9 @@ if (!window.messageListenerSet) {
                     nextDelayMax: window.nextDelayMax,
                     emptyResponsesCount: 0
                 });
-
                 if (!window.globalObserver) {
                     window.globalObserver = new GlobalSelectorMutationObserver();
                 }
-
                 if (window.currentMode === 'manual') {
                     window.sendLogToBackground("✅ РУЧНОЙ режим");
                     if (!window.questionObserver) {
@@ -1740,18 +540,11 @@ if (!window.initialLoad) {
         if (result.nextDelayMin !== undefined) window.nextDelayMin = result.nextDelayMin;
         if (result.nextDelayMax !== undefined) window.nextDelayMax = result.nextDelayMax;
         if (result.targetGrade !== undefined) window.targetGrade = result.targetGrade;
-
-        // ✅ ЗАГРУЗКА НАСТРОЕК ПЕРЕЗАГРУЗКИ
-        if (result.maxReloadAttempts !== undefined) {
-            window.maxReloadAttempts = result.maxReloadAttempts;
-        }
-        if (result.currentReloadCount !== undefined) {
-            window.currentReloadCount = result.currentReloadCount;
-        }
+        if (result.maxReloadAttempts !== undefined) window.maxReloadAttempts = result.maxReloadAttempts;
+        if (result.currentReloadCount !== undefined) window.currentReloadCount = result.currentReloadCount;
 
         window.isLocked = result.isLocked || false;
 
-        // ✅ ЛОГИКА АВТОВОССТАНОВЛЕНИЯ
         const shouldResume = result.shouldResumeAfterReload && window.isLocked && !result.isStopped && window.currentMode === 'auto_ai';
 
         if (shouldResume) {
@@ -1759,7 +552,6 @@ if (!window.initialLoad) {
             window.isStopped = false;
             window.isModalVisible = true;
             chrome.storage.local.set({ modalVisible: true, shouldResumeAfterReload: false });
-
             setTimeout(() => {
                 window.autoStartTestFlow();
             }, 2000);
@@ -1846,7 +638,6 @@ window.beforeUnloadHandler = function() {
         window.isStopped = true;
         chrome.storage.local.set({ isStopped: true, emptyResponsesCount: 0, shouldResumeAfterReload: false });
     }
-
     window.timeoutIds.forEach(id => clearTimeout(id));
     window.timeoutIds = [];
     if (window.fetchPromise) {
@@ -1881,6 +672,7 @@ window.updateModalButtonState = function(isLocked) {
     const manualSwitch = shadow.getElementById('manualModeSwitch');
     const delayInputs = shadow.querySelectorAll('input[type="number"]');
     const gradeRadios = shadow.querySelectorAll('input[name="targetGrade"]');
+    
     if (isLocked) {
         [startBtn, askAI, exportBtn, autoSwitch, autoAISwitch, manualSwitch, ...delayInputs, ...gradeRadios].forEach(el => {
             if (el) el.disabled = true;
@@ -1904,8 +696,493 @@ window.updateModalButtonState = function(isLocked) {
     }
 };
 
+window.setAIButtonState = function(locked) {
+    window.isAIButtonLocked = locked;
+    const modalHost = document.getElementById('extensionModal');
+    if (!modalHost?.shadowRoot) return;
+    const shadow = modalHost.shadowRoot;
+    const askAIButton = shadow.getElementById('askAIButton');
+    const exportDBButton = shadow.getElementById('exportDBButton');
+    if (askAIButton) {
+        askAIButton.disabled = locked;
+        askAIButton.style.backgroundColor = locked ? '#cccccc' : '#2196F3';
+        askAIButton.style.cursor = locked ? 'not-allowed' : 'pointer';
+    }
+    if (exportDBButton) {
+        exportDBButton.disabled = locked;
+        exportDBButton.style.backgroundColor = locked ? '#cccccc' : '#4CAF50';
+        exportDBButton.style.cursor = locked ? 'not-allowed' : 'pointer';
+    }
+};
+
+window.setLoadingIndicator = function(show, hasAnswers = true, message = null, countdownSeconds = null) {
+    const modalHost = document.getElementById('extensionModal');
+    if (!modalHost?.shadowRoot) return;
+    const shadow = modalHost.shadowRoot;
+    const loaderContainer = shadow.getElementById('loadingIndicatorContainer');
+    if (!loaderContainer) return;
+    
+    if (window.countdownInterval) {
+        clearInterval(window.countdownInterval);
+        window.countdownInterval = null;
+    }
+    
+    if (show) {
+        loaderContainer.innerHTML = '';
+        if (countdownSeconds && countdownSeconds > 0) {
+            const countdownText = document.createElement('span');
+            countdownText.textContent = 'Ожидание: ';
+            countdownText.style.cssText = 'font-size: 13px; color: #666; font-weight: 500; margin-right: 4px;';
+            const countdownSpan = document.createElement('span');
+            countdownSpan.id = 'countdownText';
+            countdownSpan.style.cssText = 'font-size: 13px; color: #4CAF50; font-weight: 600;';
+            countdownSpan.textContent = `${countdownSeconds} сек`;
+            loaderContainer.appendChild(countdownText);
+            loaderContainer.appendChild(countdownSpan);
+            let remainingTime = countdownSeconds;
+            window.countdownInterval = setInterval(() => {
+                remainingTime--;
+                if (remainingTime <= 0) {
+                    clearInterval(window.countdownInterval);
+                    window.countdownInterval = null;
+                    loaderContainer.innerHTML = '';
+                } else {
+                    const currentCountdown = shadow.getElementById('countdownText');
+                    if (currentCountdown) currentCountdown.textContent = `${remainingTime} сек`;
+                }
+            }, 1000);
+        } else {
+            if (message) {
+                const messageText = document.createElement('span');
+                messageText.textContent = message;
+                messageText.style.cssText = `font-size: 13px; color: ${hasAnswers ? '#666' : '#f44336'}; font-weight: 500;`;
+                loaderContainer.appendChild(messageText);
+            } else if (hasAnswers) {
+                const loaderText = document.createElement('span');
+                loaderText.textContent = 'Обращение к серверу...';
+                loaderText.style.cssText = 'margin-right: 8px; font-size: 13px; color: #666; font-weight: 500;';
+                const loader = document.createElement('div');
+                loader.id = 'loadingIndicator';
+                loader.style.cssText = 'width: 16px; height: 16px; border: 2px solid rgba(0,0,0,0.2); border-radius: 50%; border-top-color: #4CAF50; animation: spin 1s ease-in-out infinite;';
+                const style = document.createElement('style');
+                style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+                shadow.appendChild(style);
+                loaderContainer.appendChild(loaderText);
+                loaderContainer.appendChild(loader);
+            } else {
+                const noAnswersText = document.createElement('span');
+                noAnswersText.textContent = 'Нет ответов';
+                noAnswersText.style.cssText = 'font-size: 13px; color: #f44336; font-weight: 500;';
+                loaderContainer.appendChild(noAnswersText);
+            }
+        }
+    } else {
+        loaderContainer.innerHTML = '';
+    }
+};
+
+window.showModal = function() {
+    const existingModal = document.getElementById('extensionModal');
+    if (existingModal) existingModal.remove();
+    
+    const modalHost = document.createElement('div');
+    modalHost.id = 'extensionModal';
+    modalHost.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 999999; display: block; background-color: rgba(0, 0, 0, 0); pointer-events: none;';
+    
+    const shadowRoot = modalHost.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = `
+        #modalContent { 
+            background-color: white; 
+            padding: 12px; 
+            border-radius: 10px; 
+            width: 340px;
+            max-width: 95%; 
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5); 
+            position: absolute; 
+            left: 50%; 
+            top: 50%; 
+            transform: translate(-50%, -50%); 
+            pointer-events: auto; 
+            cursor: default; 
+            min-height: 520px;
+            display: flex; 
+            flex-direction: column; 
+            resize: both; 
+            overflow: auto; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        #modalHeader { 
+            cursor: move; 
+            padding: 6px 8px; 
+            margin: -12px -12px 8px -12px; 
+            border-bottom: 1px solid #eee; 
+            user-select: none; 
+            display: flex; 
+            align-items: center; 
+            justify-content: space-between; 
+            position: sticky; 
+            top: 0; 
+            background-color: #f8f9fa; 
+            z-index: 10; 
+            border-radius: 10px 10px 0 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+        }
+        #loadingIndicatorContainer { 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            padding: 4px; 
+            margin: 0 -12px 6px -12px; 
+            background-color: #f9f9f9; 
+            border-radius: 4px; 
+            border: 1px solid #eee; 
+            min-height: 24px; 
+            font-size: 12px;
+        }
+        .mode-switch { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 6px; 
+            padding: 6px 8px; 
+            background-color: #f5f5f5; 
+            border-radius: 4px; 
+            border: 1px solid #ddd; 
+        }
+        button { 
+            padding: 6px; 
+            margin-top: 4px; 
+            cursor: pointer; 
+            border: none; 
+            border-radius: 4px; 
+            width: 100%; 
+            margin-bottom: 4px; 
+            font-size: 13px; 
+            font-weight: 600; 
+            transition: all 0.2s; 
+        }
+        button:hover:not(:disabled) { 
+            opacity: 0.9; 
+            transform: translateY(-1px); 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2); 
+        }
+        button:disabled { 
+            background-color: #e0e0e0; 
+            cursor: not-allowed; 
+            opacity: 0.6; 
+        }
+        #startButton:not(:disabled) { 
+            background-color: #4CAF50; 
+            color: white; 
+        }
+        #stopButton { 
+            background-color: #f44336; 
+            color: white; 
+        }
+        #askAIButton { 
+            background-color: #2196F3; 
+            color: white; 
+        }
+        #exportDBButton { 
+            background-color: #4CAF50; 
+            color: white;  
+        }
+        #exportLogsButton { 
+            background-color: #9C27B0; 
+            color: white; 
+        }
+        #closeButton { 
+            background-color: #9E9E9E; 
+            color: white; 
+        }
+        .toggle-switch { 
+            position: relative; 
+            display: inline-block; 
+            width: 40px; 
+            height: 20px; 
+        }
+        .toggle-switch input { 
+            opacity: 0; 
+            width: 0; 
+            height: 0; 
+        }
+        .toggle-switch .slider { 
+            position: absolute; 
+            cursor: pointer; 
+            top: 0; 
+            left: 0; 
+            right: 0; 
+            bottom: 0; 
+            background-color: #ccc; 
+            transition: .3s; 
+            border-radius: 20px; 
+        }
+        .toggle-switch .slider:before { 
+            position: absolute; 
+            content: " "; 
+            height: 14px; 
+            width: 14px; 
+            left: 3px; 
+            bottom: 3px; 
+            background-color: white; 
+            transition: .3s; 
+            border-radius: 50%; 
+        }
+        input:checked + .slider { 
+            background-color: #4CAF50; 
+        }
+        input:checked + .slider:before { 
+            transform: translateX(20px); 
+        }
+        #resizeHandle {   
+            position: absolute; 
+            bottom: 0; 
+            right: 0; 
+            width: 10px; 
+            height: 10px; 
+            background: linear-gradient(135deg, #ccc 50%, transparent 50%); 
+            cursor: nwse-resize; 
+            z-index: 20; 
+        }
+    `;
+
+    const modalContent = document.createElement('div');
+    modalContent.id = 'modalContent';
+    modalContent.innerHTML = `
+        <div id="modalHeader">⚙️ Параметры</div>
+        <div id="loadingIndicatorContainer"></div>
+        
+        <div class="mode-switch">
+            <label for="manualModeSwitch" style="font-size: 13px; font-weight: 600; color: #333;">Ручной режим</label>
+            <label class="toggle-switch">
+                <input type="checkbox" id="manualModeSwitch">
+                <span class="slider"></span>
+            </label>
+        </div>
+        
+        <div class="mode-switch">
+            <label for="autoModeSwitch" style="font-size: 13px; font-weight: 600; color: #333;">Автоматический режим</label>
+            <label class="toggle-switch">
+                <input type="checkbox" id="autoModeSwitch">
+                <span class="slider"></span>
+            </label>
+        </div>
+        
+        <div class="mode-switch">
+            <label for="autoAISwitch" style="font-size: 13px; font-weight: 600; color: #333;">Автоподбор с ИИ</label>
+            <label class="toggle-switch">
+                <input type="checkbox" id="autoAISwitch">
+                <span class="slider"></span>
+            </label>
+        </div>
+
+        <button id="startButton">🚀 Запустить</button>
+        <button id="stopButton">⏹️ Остановить</button>
+        <button id="askAIButton">🤖 Спросить ИИ</button>
+        <button id="exportDBButton">📤 Выгрузить БД</button>
+        <button id="exportLogsButton">📥 Выгрузить лог</button>
+        <button id="closeButton">❌ Закрыть</button>
+        <div id="resizeHandle"></div>
+    `;
+
+    shadowRoot.appendChild(style);
+    shadowRoot.appendChild(modalContent);
+    document.body.appendChild(modalHost);
+
+    const modalHeader = shadowRoot.getElementById('modalHeader');
+    const modalContentElement = shadowRoot.getElementById('modalContent');
+    let isDragging = false;
+    let offsetX, offsetY;
+
+    modalHeader.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        const rect = modalContentElement.getBoundingClientRect();
+        modalContentElement.style.left = `${rect.left}px`;
+        modalContentElement.style.top = `${rect.top}px`;
+        modalContentElement.style.transform = 'none';
+        offsetX = e.clientX - rect.left;
+        offsetY = e.clientY - rect.top;
+        modalContentElement.style.cursor = 'grabbing';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        modalContentElement.style.left = `${e.clientX - offsetX}px`;
+        modalContentElement.style.top = `${e.clientY - offsetY}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!isDragging) return;
+        isDragging = false;
+        modalContentElement.style.cursor = 'default';
+        chrome.storage.local.set({ modalPosition: { left: modalContentElement.style.left, top: modalContentElement.style.top } });
+    });
+
+    const resizeHandle = shadowRoot.getElementById('resizeHandle');
+    let isResizing = false;
+    let startWidth, startHeight;
+
+    resizeHandle.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        startWidth = modalContentElement.offsetWidth;
+        startHeight = modalContentElement.offsetHeight;
+        e.preventDefault();
+        modalContentElement.style.cursor = 'nwse-resize';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        let width = startWidth + e.movementX;
+        let height = startHeight + e.movementY;
+        width = Math.max(width, 280);
+        height = Math.max(height, 440);
+        modalContentElement.style.width = `${width}px`;
+        modalContentElement.style.height = `${height}px`;
+        startWidth = width;
+        startHeight = height;
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!isResizing) return;
+        isResizing = false;
+        modalContentElement.style.cursor = 'default';
+        chrome.storage.local.set({ modalWidth: modalContentElement.style.width, modalHeight: modalContentElement.style.height });
+    });
+
+    const manualModeSwitch = shadowRoot.getElementById('manualModeSwitch');
+    const autoModeSwitch = shadowRoot.getElementById('autoModeSwitch');
+    const autoAISwitch = shadowRoot.getElementById('autoAISwitch');
+    const startButton = shadowRoot.getElementById('startButton');
+    const stopButton = shadowRoot.getElementById('stopButton');
+    const askAIButton = shadowRoot.getElementById('askAIButton');
+    const exportDBButton = shadowRoot.getElementById('exportDBButton');
+    const exportLogsButton = shadowRoot.getElementById('exportLogsButton');
+    const closeButton = shadowRoot.getElementById('closeButton');
+
+    const updateModeSwitches = (source) => {
+        if (source === 'manual' && manualModeSwitch.checked) {
+            autoModeSwitch.checked = false;
+            autoAISwitch.checked = false;
+        } else if (source === 'auto' && autoModeSwitch.checked) {
+            manualModeSwitch.checked = false;
+            autoAISwitch.checked = false;
+        } else if (source === 'ai' && autoAISwitch.checked) {
+            manualModeSwitch.checked = false;
+            autoModeSwitch.checked = false;
+        }
+        
+        let mode = 'manual';
+        if (autoModeSwitch.checked) mode = 'auto';
+        else if (autoAISwitch.checked) mode = 'auto_ai';
+        
+        window.isStopped = false;
+        chrome.storage.local.set({ mode, isStopped: false });
+        window.updateModalButtonState(window.isLocked);
+    };
+
+    manualModeSwitch.addEventListener('change', () => updateModeSwitches('manual'));
+    autoModeSwitch.addEventListener('change', () => updateModeSwitches('auto'));
+    autoAISwitch.addEventListener('change', () => updateModeSwitches('ai'));
+
+    startButton.addEventListener('click', () => {
+        if (!manualModeSwitch.checked && !autoModeSwitch.checked && !autoAISwitch.checked) {
+            alert('Ошибка: Не выбран ни один режим работы!');
+            return;
+        }
+
+        let mode = 'manual';
+        if (autoModeSwitch.checked) mode = 'auto';
+        else if (autoAISwitch.checked) mode = 'auto_ai';
+        
+        const delayMin = 3;
+        const delayMax = 6;
+        const nextDelayMin = 1;
+        const nextDelayMax = 4;
+        
+        window.isStopped = false;
+        window.isLocked = true;
+        window.updateModalButtonState(true);
+        window.setAIButtonState(true);
+        
+        chrome.storage.local.set({ 
+            isLocked: true, isStopped: false, mode: mode, 
+            delayMin, delayMax, nextDelayMin, nextDelayMax
+        }, () => {
+            chrome.runtime.sendMessage({ action: "startScript", mode, delayMin, delayMax, nextDelayMin, nextDelayMax });
+        });
+    });
+
+    stopButton.addEventListener('click', () => {
+        if (window.countdownInterval) {
+            clearInterval(window.countdownInterval);
+            window.countdownInterval = null;
+        }
+        window.stopScript(true, true);
+        window.updateModalButtonState(false);
+        window.setAIButtonState(false);
+    });
+
+    if (askAIButton) askAIButton.addEventListener('click', () => {
+        if (window.handleAskAI) window.handleAskAI();
+    });
+    
+    if (exportDBButton) exportDBButton.addEventListener('click', () => {
+        chrome.runtime.sendMessage({ action: "exportDB" });
+    });
+    
+    if (exportLogsButton) exportLogsButton.addEventListener('click', () => {
+        chrome.runtime.sendMessage({ action: "exportLogs" });
+    });
+
+    closeButton.addEventListener('click', () => {
+        if (window.countdownInterval) {
+            clearInterval(window.countdownInterval);
+            window.countdownInterval = null;
+        }
+        modalHost.style.display = 'none';
+        window.isModalVisible = false;
+        chrome.storage.local.set({ modalVisible: false });
+    });
+
+    chrome.storage.local.get(['mode', 'modalPosition', 'modalWidth', 'modalHeight'], (result) => {
+        const mode = result.mode || 'manual';
+        manualModeSwitch.checked = mode === 'manual';
+        autoModeSwitch.checked = mode === 'auto';
+        autoAISwitch.checked = mode === 'auto_ai';
+        
+        if (result.modalPosition) {
+            modalContentElement.style.left = result.modalPosition.left;
+            modalContentElement.style.top = result.modalPosition.top;
+            modalContentElement.style.transform = 'none';
+        }
+        if (result.modalWidth) modalContentElement.style.width = result.modalWidth;
+        if (result.modalHeight) modalContentElement.style.height = result.modalHeight;
+        
+        window.updateModalButtonState(window.isLocked);
+        window.setAIButtonState(window.isLocked);
+    });
+
+    window.isModalVisible = true;
+    chrome.storage.local.set({ modalVisible: true });
+};
+
 if (!window.buttonListenerSet) {
-    window.setupNextButtonListener();
     window.buttonListenerSet = true;
     window.addEventListener('beforeunload', window.beforeUnloadHandler);
 }
+
+// =====================================================================
+// === ЗАГЛУШКИ ДЛЯ НЕСУЩЕСТВУЮЩИХ ФУНКЦИЙ ===
+// =====================================================================
+window.handleAskAI = window.handleAskAI || function() {};
+window.handleNextQuestion = window.handleNextQuestion || function() {};
+window.executeModeLogic = window.executeModeLogic || async function() {};
+window.autoStartTestFlow = window.autoStartTestFlow || async function() {};
+window.setupQuestionObserver = window.setupQuestionObserver || function() {};
+window.stopScript = window.stopScript || function() {};
+window.exportDatabase = window.exportDatabase || async function() {};
+window.closeResultsModal = window.closeResultsModal || async function() {};

@@ -26,6 +26,7 @@ const downloadFile = (data, filename, type) => {
     }
 };
 
+// ✅ ИСПРАВЛЕНО: Убрана асинхронность где не нужна
 chrome.action.onClicked.addListener((tab) => {
     logMessage('background', '🖱️ Клик по иконке');
     if (!tab || !tab.id) {
@@ -41,6 +42,7 @@ chrome.action.onClicked.addListener((tab) => {
     });
 });
 
+// ✅ ИСПРАВЛЕНО: Правильная обработка асинхронных ответов
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     switch (request.action) {
         case "log":
@@ -94,5 +96,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         case "toggleModal":
             break;
     }
-    return true;
+    
+    // ✅ ИСПРАВЛЕНО: Не возвращаем true, так как не используем sendResponse
+    return false;
 });

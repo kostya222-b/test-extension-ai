@@ -13,7 +13,7 @@ const CONFIG = {
 // === ФУНКЦИИ ДЛЯ РАБОТЫ С RENDER BACKEND ===
 // =====================================================================
 
-// Поиск ответов через Render сервер
+// ✅ Поиск ответов через Render сервер (ВОЗВРАЩАЕТ ID!)
 window.fetchAnswersFromServer = async function(question) {
     try {
         const response = await fetch(`${CONFIG.backendUrl}/api/answers?question=${encodeURIComponent(question)}`, {
@@ -25,27 +25,37 @@ window.fetchAnswersFromServer = async function(question) {
         if (!response.ok) throw new Error(`Server error: ${response.status}`);
 
         const result = await response.json();
-
+        
         if (result.success && result.data?.length > 0) {
+            // Сначала ищем запись с is_correct = true
             const correctRecord = result.data.find(r => r.is_correct === true);
             if (correctRecord?.answers) {
-                window.sendLogToBackground?.(`✅ Найдено на сервере: ${correctRecord.answers.length} ответов`);
-                return correctRecord.answers;
+                window.sendLogToBackground?.(`✅ Найдено на сервере: ${correctRecord.answers.length} ответов (ID: ${correctRecord.id})`);
+                return {
+                    answers: correctRecord.answers,
+                    id: correctRecord.id,  // ← ВОЗВРАЩАЕМ ID!
+                    is_correct: correctRecord.is_correct
+                };
             }
+            // Если нет правильных — возвращаем первую запись
             const topRecord = result.data[0];
             if (topRecord?.answers) {
-                window.sendLogToBackground?.(`⚠️ Найдено на сервере (статус неизвестен)`);
-                return topRecord.answers;
+                window.sendLogToBackground?.(`⚠️ Найдено на сервере (статус: ${topRecord.is_correct}, ID: ${topRecord.id})`);
+                return {
+                    answers: topRecord.answers,
+                    id: topRecord.id,  // ← ВОЗВРАЩАЕМ ID!
+                    is_correct: topRecord.is_correct
+                };
             }
         }
-        return [];
+        return null;
     } catch (error) {
         window.sendLogToBackground?.(`⚠️ Ошибка поиска на сервере: ${error.message}`);
-        return [];
+        return null;
     }
 };
 
-// Сохранение ответа через Render сервер
+// ✅ Сохранение ответа через Render сервер
 window.saveAnswerToServer = async function(question, answers, isCorrect = null) {
     if (window.currentMode !== 'auto_ai') {
         window.sendLogToBackground?.(`ℹ️ Пропуск сохранения (режим: ${window.currentMode})`);
@@ -70,7 +80,7 @@ window.saveAnswerToServer = async function(question, answers, isCorrect = null) 
 
         const result = await response.json();
         if (result.success) {
-            window.sendLogToBackground?.(`💾 Сохранено на сервере: "${question.substring(0, 40)}..."`);
+            window.sendLogToBackground?.(`💾 Сохранено на сервере: "${question.substring(0, 40)}..." [ID: ${result.data?.id}]`);
             return true;
         }
         return false;
@@ -80,13 +90,12 @@ window.saveAnswerToServer = async function(question, answers, isCorrect = null) 
     }
 };
 
-// ✅ Обновление статуса ответа через Render сервер (ИСПРАВЛЕНО!)
-window.updateAnswerStatus = async function(id, isCorrect) {
+// ✅ Обновление статуса ответа через Render сервер
+window.updateAnswerStatusOnServer = async function(id, isCorrect) {
     if (!id) {
         window.sendLogToBackground?.(`⚠️ Нет ID для обновления`);
         return false;
     }
-
     try {
         const response = await fetch(`${CONFIG.backendUrl}/api/answers/${id}`, {
             method: 'PATCH',
@@ -94,19 +103,15 @@ window.updateAnswerStatus = async function(id, isCorrect) {
                 'Content-Type': 'application/json',
                 'X-API-Key': CONFIG.apiKey
             },
-            body: JSON.stringify({
-                isCorrect: isCorrect
-            }),
+            body: JSON.stringify({ isCorrect: isCorrect }),
             signal: AbortSignal.timeout(CONFIG.timeout)
         });
 
-        if (!response.ok) {
-            throw new Error(`Status ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`Status ${response.status}`);
 
         const result = await response.json();
         if (result.success) {
-            window.sendLogToBackground?.(`✅ Успешно обновлено #${id}`);
+            window.sendLogToBackground?.(`✅ Обновлено на сервере #${id}`);
             return true;
         }
         return false;
@@ -116,13 +121,13 @@ window.updateAnswerStatus = async function(id, isCorrect) {
     }
 };
 
-// Экспорт в глобальную область
+// ✅ Экспорт в глобальную область
 window.CONFIG = CONFIG;
 window.fetchAnswersFromServer = fetchAnswersFromServer;
 window.saveAnswerToServer = saveAnswerToServer;
-window.updateAnswerStatus = updateAnswerStatus;
+window.updateAnswerStatusOnServer = updateAnswerStatusOnServer;
 
-// Проверка подключения
+// ✅ Проверка подключения
 (async function testConnection() {
     try {
         const response = await fetch(`${CONFIG.backendUrl}/health`);
