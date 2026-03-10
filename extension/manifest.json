@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Помощник для тестов",
-  "version": "3.4.0",
-  "description": "Расширение для прохождения тестов с умной навигацией, ИИ и общей базой ответов",
+  "version": "4.0.0",
+  "description": "Расширение для прохождения тестов с ИИ и общей базой ответов",
   "action": {
     "default_icon": {
       "16": "icons/icon16.png",
@@ -16,15 +16,12 @@
     "storage",
     "scripting",
     "tabs",
-    "downloads",
-    "unlimitedStorage"
+    "downloads"
   ],
   "host_permissions": [
     "*://*.edu.rosminzdrav.ru/*",
-    "*://edu.rosminzdrav.ru/*",
-    "*://*.supabase.co/*",
-    "*://api.mistral.ai/*",
-    "*://new-8peq.onrender.com/*"
+    "*://*.onrender.com/*",
+    "*://api.mistral.ai/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -33,8 +30,7 @@
   "content_scripts": [
     {
       "matches": [
-        "*://*.edu.rosminzdrav.ru/*",
-        "*://edu.rosminzdrav.ru/*"
+        "*://*.edu.rosminzdrav.ru/*"
       ],
       "js": [
         "contentScript/supabase-config.js",
@@ -51,11 +47,5 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["icons/*.png"],
-      "matches": ["*://*.edu.rosminzdrav.ru/*"]
-    }
-  ]
+  }
 }

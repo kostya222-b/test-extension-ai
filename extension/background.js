@@ -4,7 +4,9 @@ const MAX_LOGS = 1000;
 
 const logMessage = (source, ...args) => {
     const timestamp = new Date().toISOString();
-    const logEntry = `[${timestamp}] ${source}: ${args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ')}`;
+    const logEntry = `[${timestamp}] ${source}: ${args.map(arg => 
+        typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+    ).join(' ')}`;
     console.log(logEntry);
     logBuffer.push(logEntry);
     if (logBuffer.length > MAX_LOGS) logBuffer.shift();
@@ -26,13 +28,11 @@ const downloadFile = (data, filename, type) => {
 
 chrome.action.onClicked.addListener((tab) => {
     logMessage('background', '🖱️ Клик по иконке');
-    
     if (!tab || !tab.id) {
         logMessage('background', '❌ Вкладка не найдена');
         return;
     }
-    
-    // ✅ ОДНА ПОПЫТКА (если не вышло — значит контент-скрипт не загружен)
+
     chrome.tabs.sendMessage(tab.id, { action: "toggleModal" }).catch((err) => {
         logMessage('background', '⚠️ Контент-скрипт не отвечает. Проверьте:');
         logMessage('background', '1. Вы на сайте edu.rosminzdrav.ru?');
@@ -90,7 +90,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const logContent = logBuffer.join('\n');
             downloadFile(logContent, `extension_log_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`, 'text/plain');
             break;
-            
+
         case "toggleModal":
             break;
     }

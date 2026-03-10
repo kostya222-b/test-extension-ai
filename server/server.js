@@ -10,13 +10,13 @@ const PORT = process.env.PORT || 10000;
 
 // Middleware
 app.use(cors({
-    origin: ['chrome-extension://*', 'https://edu.rosminzdrav.ru', 'http://localhost:*'],
-    methods: ['GET', 'POST', 'PUT'],
+    origin: ['chrome-extension://*', 'https://edu.rosminzdrav.ru'],
+    methods: ['GET', 'POST'],
     allowedHeaders: ['Content-Type', 'X-API-Key']
 }));
 app.use(express.json());
 
-// ✅ Supabase клиент (service_role key ТОЛЬКО на сервере!)
+// ✅ Supabase клиент (service_role ТОЛЬКО на сервере!)
 const supabase = createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_SERVICE_KEY
@@ -37,9 +37,7 @@ const validateApiKey = (req, res, next) => {
 app.get('/api/answers', async (req, res) => {
     try {
         const { question } = req.query;
-        if (!question) {
-            return res.status(400).json({ error: 'Вопрос не указан' });
-        }
+        if (!question) return res.status(400).json({ error: 'Вопрос не указан' });
 
         const questionHash = crypto.createHash('md5').update(question.trim()).digest('hex');
 
@@ -78,19 +76,17 @@ app.post('/api/answers', validateApiKey, async (req, res) => {
         const normalizedAnswers = answers.map(a => a.trim()).sort();
 
         // Проверка на дубликат
-        const { data: existing, error: findError } = await supabase
+        const { data: existing } = await supabase
             .from('questions')
             .select('*')
             .eq('question_hash', questionHash)
             .eq('answers', `{${normalizedAnswers.join(',')}}`)
             .maybeSingle();
 
-        if (findError) throw findError;
-
         if (existing) {
             // Обновление существующей записи
             if (isCorrect !== null && existing.is_correct !== isCorrect) {
-                const { data: updated, error: updateError } = await supabase
+                const { data: updated } = await supabase
                     .from('questions')
                     .update({
                         is_correct: isCorrect,
@@ -101,14 +97,13 @@ app.post('/api/answers', validateApiKey, async (req, res) => {
                     .select()
                     .single();
                 
-                if (updateError) throw updateError;
                 res.json({ success: true, message: 'Обновлено', data: updated });
             } else {
                 res.json({ success: true, message: 'Уже существует', data: existing });
             }
         } else {
             // Создание новой записи
-            const { data: created, error: createError } = await supabase
+            const { data: created } = await supabase
                 .from('questions')
                 .insert({
                     question_hash: questionHash,
@@ -122,30 +117,10 @@ app.post('/api/answers', validateApiKey, async (req, res) => {
                 .select()
                 .single();
             
-            if (createError) throw createError;
             res.json({ success: true, message: 'Создано', data: created });
         }
     } catch (error) {
         console.error('Ошибка сохранения:', error);
-        res.status(500).json({ error: 'Ошибка сервера', message: error.message });
-    }
-});
-
-// =====================================================================
-// === GET: Статистика ===
-// =====================================================================
-app.get('/api/stats', async (req, res) => {
-    try {
-        const { count: total } = await supabase.from('questions').select('*', { count: 'exact', head: true });
-        const { count: correct } = await supabase.from('questions').select('*', { count: 'exact', head: true }).eq('is_correct', true);
-        const { count: incorrect } = await supabase.from('questions').select('*', { count: 'exact', head: true }).eq('is_correct', false);
-        const { count: unknown } = await supabase.from('questions').select('*', { count: 'exact', head: true }).is('is_correct', null);
-
-        res.json({
-            success: true,
-            stats: { total, correct, incorrect, unknown }
-        });
-    } catch (error) {
         res.status(500).json({ error: 'Ошибка сервера', message: error.message });
     }
 });
@@ -162,5 +137,4 @@ app.get('/health', (req, res) => {
 // =====================================================================
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Сервер запущен на порту ${PORT}`);
-    console.log(`📍 URL: https://your-app.onrender.com`);
 });
