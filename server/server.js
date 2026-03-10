@@ -2,18 +2,34 @@
 require('dotenv').config();
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const cors = require('cors');  // ← ТОЛЬКО ОДИН РАЗ!
+const cors = require('cors');
 const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Middleware
+// ✅ CORS настройка для расширения и сайта
 app.use(cors({
-    origin: ['chrome-extension://*', 'https://edu.rosminzdrav.ru'],
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type', 'X-API-Key']
+    origin: function(origin, callback) {
+        // Разрешаем:
+        // - Запросы без origin (расширения, curl, etc.)
+        // - Наш сайт обучения
+        // - Любые chrome-extension:// (для разработки)
+        if (!origin || 
+            origin === 'https://edu.rosminzdrav.ru' ||
+            origin?.startsWith('chrome-extension://')) {
+            return callback(null, true);
+        }
+        return callback(new Error('Not allowed by CORS'));
+    },
+    methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization'],
+    credentials: false
 }));
+
+// ✅ Обработка preflight запросов
+app.options('*', cors());
+
 app.use(express.json());
 
 // ✅ Supabase клиент (service_role ТОЛЬКО на сервере!)
