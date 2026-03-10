@@ -265,17 +265,22 @@ window.saveQuestionToDB = async function(question, selectedAnswers, isCorrect = 
     }
 };
 
-// ✅ ПОИСК: Supabase → локальный кэш
+// =====================================================================
+// === ПОИСК: Supabase → локальный кэш ===
+// =====================================================================
 window.findQuestionInDB = async function(question) {
     // 1. Сначала пробуем Supabase
     try {
-        const supabaseAnswers = await window.fetchAnswersFromSupabase(question);
-        if (supabaseAnswers && supabaseAnswers.length > 0) {
+        const supabaseResult = await window.fetchAnswersFromServer(question);
+        
+        // ✅ Проверяем, что вернулся объект с ответами и ID
+        if (supabaseResult && supabaseResult.answers && Array.isArray(supabaseResult.answers) && supabaseResult.answers.length > 0) {
             return [{
                 questionHash: window.getQuestionHash(question),
                 question,
-                selectedAnswers: supabaseAnswers,
-                isCorrect: true,
+                selectedAnswers: supabaseResult.answers,
+                isCorrect: supabaseResult.is_correct,
+                id: supabaseResult.id,  // ← СОХРАНЯЕМ ID ИЗ СЕРВЕРА!
                 timestamp: new Date().toISOString(),
                 source: 'supabase'
             }];
@@ -1439,6 +1444,7 @@ window.checkTestResults = async function() {
     window.sendLogToBackground("📊 Проверка результатов и оценки...");
     let attempts = 0;
     const maxAttempts = 30;
+    
     if (window.checkResultsInterval) {
         clearInterval(window.checkResultsInterval);
         window.checkResultsInterval = null;
@@ -1507,17 +1513,43 @@ window.checkTestResults = async function() {
                         const normalizedDb = record.selectedAnswers.map(a => window.normalizeText(a)).sort();
                         const normalizedPage = selectedAnswersFromPage.map(a => window.normalizeText(a)).sort();
 
-                        if (normalizedDb.length === normalizedPage.length &&
+                        if (normalizedDb.length === normalizedPage.length && 
                             normalizedDb.every((val, i) => val === normalizedPage[i])) {
 
                             matchFound = true;
+                            
+                            // ✅ ПРОВЕРКА: есть ли id у записи
+                            if (!record.id) {
+                                window.sendLogToBackground(`⚠️ У записи нет id, пропускаем обновление: ${questionText.substring(0, 50)}...`);
+                                break;
+                            }
+                            
                             if (record.isCorrect !== isCorrectFromPage) {
                                 window.sendLogToBackground(`🔄 Обновление #${record.id}: ${record.isCorrect} → ${isCorrectFromPage}`);
-                                const transaction = window.db.transaction(['questions'], 'readwrite');
-                                const store = transaction.objectStore('questions');
-                                record.isCorrect = isCorrectFromPage;
-                                store.put(record);
-                                updatedCount++;
+                                
+                                // ✅ ОТПРАВЛЯЕМ ЗАПРОС НА ОБНОВЛЕНИЕ ЧЕРЕЗ RENDER СЕРВЕР
+                                try {
+                                    const response = await fetch(`${CONFIG.backendUrl}/api/answers/${record.id}`, {
+                                        method: 'PATCH',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            'X-API-Key': CONFIG.apiKey
+                                        },
+                                        body: JSON.stringify({
+                                            isCorrect: isCorrectFromPage
+                                        })
+                                    });
+                                    
+                                    if (response.ok) {
+                                        updatedCount++;
+                                        window.sendLogToBackground(`✅ Успешно обновлено #${record.id}`);
+                                    } else {
+                                        const errorData = await response.json().catch(() => ({}));
+                                        window.sendLogToBackground(`❌ Ошибка обновления #${record.id}: ${response.status} ${errorData.error || ''}`);
+                                    }
+                                } catch (error) {
+                                    window.sendLogToBackground(`❌ Ошибка запроса обновления #${record.id}: ${error.message}`);
+                                }
                             }
                             break;
                         }
@@ -1530,7 +1562,7 @@ window.checkTestResults = async function() {
                     }
                     processedCount++;
                 } catch (e) {
-                    window.sendLogToBackground("⚠️ Ошибка: ", e);
+                    window.sendLogToBackground("⚠️ Ошибка обработки вопроса:", e);
                 }
             });
 

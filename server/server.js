@@ -2,21 +2,22 @@
 require('dotenv').config();
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const cors = require('cors');  // ← ТОЛЬКО ОДИН РАЗ!
+const cors = require('cors');
 const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ✅ CORS настройка — ИСПРАВЛЕННАЯ ВЕРСИЯ для Chrome Extension
+// =====================================================================
+// === CORS НАСТРОЙКА — ДЛЯ CHROME EXTENSION + САЙТА ===
+// =====================================================================
 app.use(cors({
     origin: function(origin, callback) {
-        // Разрешаем:
-        // 1. Запросы БЕЗ origin (расширения, curl, Postman)
+        // 1. Разрешаем запросы БЕЗ origin (расширения Chrome, curl, Postman)
         if (!origin) return callback(null, true);
         
-        // 2. Наш сайт обучения
-        if (origin === 'https://iomqt-vo.edu.rosminzdrav.ru') return callback(null, true);
+        // 2. Наш сайт обучения (основной + поддомены)
+        if (origin.includes('iomqt-vo.edu.rosminzdrav.ru')) return callback(null, true);
         
         // 3. Любые chrome-extension:// (для разработки)
         if (origin.startsWith('chrome-extension://')) return callback(null, true);
@@ -26,11 +27,14 @@ app.use(cors({
             return callback(null, true);
         }
         
+        // 5. Render preview URLs
+        if (origin.includes('onrender.com')) return callback(null, true);
+        
         // Всё остальное — блокируем
         return callback(new Error('Not allowed by CORS'));
     },
-    methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization'],
+    methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'Accept'],
     credentials: false
 }));
 
@@ -39,13 +43,17 @@ app.options('*', cors());
 
 app.use(express.json());
 
-// ✅ Supabase клиент (service_role ТОЛЬКО на сервере!)
+// =====================================================================
+// === SUPABASE КЛИЕНТ (service_role ТОЛЬКО НА СЕРВЕРЕ!) ===
+// =====================================================================
 const supabase = createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_SERVICE_KEY
 );
 
-// ✅ Простая авторизация по API ключу
+// =====================================================================
+// === АВТОРИЗАЦИЯ ПО API КЛЮЧУ ===
+// =====================================================================
 const validateApiKey = (req, res, next) => {
     const apiKey = req.headers['x-api-key'];
     if (!apiKey || apiKey !== process.env.API_KEY) {
@@ -55,7 +63,7 @@ const validateApiKey = (req, res, next) => {
 };
 
 // =====================================================================
-// === GET: Поиск ответов (публичный, без API ключа) ===
+// === GET: ПОИСК ОТВЕТОВ (ПУБЛИЧНЫЙ, БЕЗ API КЛЮЧА) ===
 // =====================================================================
 app.get('/api/answers', async (req, res) => {
     try {
@@ -85,7 +93,7 @@ app.get('/api/answers', async (req, res) => {
 });
 
 // =====================================================================
-// === POST: Сохранение ответа (требует API ключ) ===
+// === POST: СОХРАНЕНИЕ ОТВЕТА (ТРЕБУЕТ API КЛЮЧ) ===
 // =====================================================================
 app.post('/api/answers', validateApiKey, async (req, res) => {
     try {
@@ -149,15 +157,69 @@ app.post('/api/answers', validateApiKey, async (req, res) => {
 });
 
 // =====================================================================
-// === Health Check ===
+// === PATCH: ОБНОВЛЕНИЕ СТАТУСА ОТВЕТА (ТРЕБУЕТ API КЛЮЧ) ===
+// =====================================================================
+app.patch('/api/answers/:id', validateApiKey, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { isCorrect, votes } = req.body;
+
+        if (isCorrect === undefined && votes === undefined) {
+            return res.status(400).json({ error: 'Необходимо указать isCorrect или votes' });
+        }
+
+        const updateData = {};
+        if (isCorrect !== undefined) updateData.is_correct = isCorrect;
+        if (votes !== undefined) updateData.votes = votes;
+        updateData.updated_at = new Date().toISOString();
+
+        const { data: updated, error } = await supabase
+            .from('questions')
+            .update(updateData)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({ success: true, message: 'Обновлено', data: updated });
+    } catch (error) {
+        console.error('Ошибка обновления:', error);
+        res.status(500).json({ error: 'Ошибка сервера', message: error.message });
+    }
+});
+
+// =====================================================================
+// === GET: СТАТИСТИКА (ПУБЛИЧНЫЙ) ===
+// =====================================================================
+app.get('/api/stats', async (req, res) => {
+    try {
+        const { count: total } = await supabase.from('questions').select('*', { count: 'exact', head: true });
+        const { count: correct } = await supabase.from('questions').select('*', { count: 'exact', head: true }).eq('is_correct', true);
+        const { count: incorrect } = await supabase.from('questions').select('*', { count: 'exact', head: true }).eq('is_correct', false);
+        const { count: unknown } = await supabase.from('questions').select('*', { count: 'exact', head: true }).is('is_correct', null);
+
+        res.json({
+            success: true,
+            stats: { total, correct, incorrect, unknown }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Ошибка сервера', message: error.message });
+    }
+});
+
+// =====================================================================
+// === HEALTH CHECK ===
 // =====================================================================
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // =====================================================================
-// === Старт сервера ===
+// === ЗАПУСК СЕРВЕРА ===
 // =====================================================================
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Сервер запущен на порту ${PORT}`);
+    console.log(`📍 URL: https://your-app.onrender.com`);
+    console.log(`🔗 Health: https://your-app.onrender.com/health`);
 });
