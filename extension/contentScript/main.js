@@ -1473,100 +1473,127 @@ window.checkTestResults = async function() {
             let updatedCount = 0;
             let createdCount = 0;
 
-            const promises = Array.from(questionItems).map(async (item) => {
-                try {
-                    const questionTitle = item.querySelector('.questionList-item-content-title, .question-title-text');
-                    const questionText = questionTitle?.textContent?.trim() || '';
-                    if (!questionText) return;
+            // ✅ ОБРАБАТЫВАЕМ ВОПРОСЫ ПАКЕТАМИ ПО 5 ШТУК
+            const batchSize = 5;
+            const batches = [];
+            
+            for (let i = 0; i < questionItems.length; i += batchSize) {
+                batches.push(Array.from(questionItems).slice(i, i + batchSize));
+            }
 
-                    const answerElements = item.querySelectorAll('.questionList-item-content-answer-text, .selected-answer');
-                    const selectedAnswersFromPage = Array.from(answerElements)
-                        .map(el => el.textContent?.trim())
-                        .filter(Boolean);
+            for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+                const batch = batches[batchIndex];
+                window.sendLogToBackground(`📦 Обработка пакета ${batchIndex + 1}/${batches.length} (${batch.length} вопросов)`);
 
-                    if (selectedAnswersFromPage.length === 0) return;
+                const promises = batch.map(async (item) => {
+                    try {
+                        const questionTitle = item.querySelector('.questionList-item-content-title, .question-title-text');
+                        const questionText = questionTitle?.textContent?.trim() || '';
+                        if (!questionText) return;
 
-                    const statusElement = item.querySelector('.questionList-item-status-notWright, .incorrect, .wrong, .status-incorrect');
-                    const isCorrectFromPage = !statusElement;
+                        const answerElements = item.querySelectorAll('.questionList-item-content-answer-text, .selected-answer');
+                        const selectedAnswersFromPage = Array.from(answerElements)
+                            .map(el => el.textContent?.trim())
+                            .filter(Boolean);
 
-                    const dbRecords = await window.findQuestionInDB(questionText);
+                        if (selectedAnswersFromPage.length === 0) return;
 
-                    // ✅ СОХРАНЯЕМ В БД ТОЛЬКО ЕСЛИ РЕЖИМ auto_ai
-                    if (window.currentMode !== 'auto_ai') {
-                        window.sendLogToBackground(`ℹ️ Пропуск сохранения (режим: ${window.currentMode})`);
-                        processedCount++;
-                        return;
-                    }
+                        const statusElement = item.querySelector('.questionList-item-status-notWright, .incorrect, .wrong, .status-incorrect');
+                        const isCorrectFromPage = !statusElement;
 
-                    if (!dbRecords || dbRecords.length === 0) {
-                        window.sendLogToBackground(`➕ НОВАЯ запись: [${selectedAnswersFromPage.join('; ')}]`);
-                        await window.saveQuestionToDB(questionText, selectedAnswersFromPage, isCorrectFromPage);
-                        createdCount++;
-                        processedCount++;
-                        return;
-                    }
+                        const dbRecords = await window.findQuestionInDB(questionText);
 
-                    let matchFound = false;
-                    for (const record of dbRecords) {
-                        if (!record.selectedAnswers || !Array.isArray(record.selectedAnswers)) continue;
+                        // ✅ СОХРАНЯЕМ В БД ТОЛЬКО ЕСЛИ РЕЖИМ auto_ai
+                        if (window.currentMode !== 'auto_ai') {
+                            window.sendLogToBackground(`ℹ️ Пропуск сохранения (режим: ${window.currentMode})`);
+                            processedCount++;
+                            return;
+                        }
 
-                        const normalizedDb = record.selectedAnswers.map(a => window.normalizeText(a)).sort();
-                        const normalizedPage = selectedAnswersFromPage.map(a => window.normalizeText(a)).sort();
+                        if (!dbRecords || dbRecords.length === 0) {
+                            window.sendLogToBackground(`➕ НОВАЯ запись: [${selectedAnswersFromPage.join('; ')}]`);
+                            await window.saveQuestionToDB(questionText, selectedAnswersFromPage, isCorrectFromPage);
+                            createdCount++;
+                            processedCount++;
+                            return;
+                        }
 
-                        if (normalizedDb.length === normalizedPage.length && 
-                            normalizedDb.every((val, i) => val === normalizedPage[i])) {
+                        let matchFound = false;
+                        for (const record of dbRecords) {
+                            if (!record.selectedAnswers || !Array.isArray(record.selectedAnswers)) continue;
 
-                            matchFound = true;
-                            
-                            // ✅ ПРОВЕРКА: есть ли id у записи
-                            if (!record.id) {
-                                window.sendLogToBackground(`⚠️ У записи нет id, пропускаем обновление: ${questionText.substring(0, 50)}...`);
+                            const normalizedDb = record.selectedAnswers.map(a => window.normalizeText(a)).sort();
+                            const normalizedPage = selectedAnswersFromPage.map(a => window.normalizeText(a)).sort();
+
+                            if (normalizedDb.length === normalizedPage.length && 
+                                normalizedDb.every((val, i) => val === normalizedPage[i])) {
+
+                                matchFound = true;
+                                if (record.isCorrect !== isCorrectFromPage) {
+                                    window.sendLogToBackground(`🔄 Обновление #${record.id}: ${record.isCorrect} → ${isCorrectFromPage}`);
+                                    
+                                    // ✅ ДОБАВЛЕНА ПОВТОРНАЯ ПОПЫТКА ПРИ ОШИБКЕ
+                                    let retryCount = 0;
+                                    const maxRetries = 3;
+                                    let success = false;
+                                    
+                                    while (retryCount < maxRetries && !success) {
+                                        try {
+                                            const response = await fetch(`${window.CONFIG.backendUrl}/api/answers/${record.id}`, {
+                                                method: 'PATCH',
+                                                headers: {
+                                                    'Content-Type': 'application/json',
+                                                    'X-API-Key': window.CONFIG.apiKey
+                                                },
+                                                body: JSON.stringify({
+                                                    isCorrect: isCorrectFromPage
+                                                }),
+                                                signal: AbortSignal.timeout(10000)
+                                            });
+                                            
+                                            if (response.ok) {
+                                                updatedCount++;
+                                                window.sendLogToBackground(`✅ Успешно обновлено #${record.id}`);
+                                                success = true;
+                                            } else {
+                                                throw new Error(`Status ${response.status}`);
+                                            }
+                                        } catch (error) {
+                                            retryCount++;
+                                            window.sendLogToBackground(`⚠️ Попытка ${retryCount}/${maxRetries} не удалась для #${record.id}: ${error.message}`);
+                                            
+                                            if (retryCount < maxRetries) {
+                                                // ✅ ЖДЁМ 2 СЕКУНДЫ ПЕРЕД СЛЕДУЮЩЕЙ ПОПЫТКОЙ
+                                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                            } else {
+                                                window.sendLogToBackground(`❌ Все попытки исчерпаны для #${record.id}`);
+                                            }
+                                        }
+                                    }
+                                }
                                 break;
                             }
-                            
-                            if (record.isCorrect !== isCorrectFromPage) {
-                                window.sendLogToBackground(`🔄 Обновление #${record.id}: ${record.isCorrect} → ${isCorrectFromPage}`);
-                                
-                                // ✅ ОТПРАВЛЯЕМ ЗАПРОС НА ОБНОВЛЕНИЕ ЧЕРЕЗ RENDER СЕРВЕР
-                                try {
-                                    const response = await fetch(`${CONFIG.backendUrl}/api/answers/${record.id}`, {
-                                        method: 'PATCH',
-                                        headers: {
-                                            'Content-Type': 'application/json',
-                                            'X-API-Key': CONFIG.apiKey
-                                        },
-                                        body: JSON.stringify({
-                                            isCorrect: isCorrectFromPage
-                                        })
-                                    });
-                                    
-                                    if (response.ok) {
-                                        updatedCount++;
-                                        window.sendLogToBackground(`✅ Успешно обновлено #${record.id}`);
-                                    } else {
-                                        const errorData = await response.json().catch(() => ({}));
-                                        window.sendLogToBackground(`❌ Ошибка обновления #${record.id}: ${response.status} ${errorData.error || ''}`);
-                                    }
-                                } catch (error) {
-                                    window.sendLogToBackground(`❌ Ошибка запроса обновления #${record.id}: ${error.message}`);
-                                }
-                            }
-                            break;
                         }
-                    }
 
-                    if (!matchFound) {
-                        window.sendLogToBackground(`❓ Новая комбинация: [${selectedAnswersFromPage.join('; ')}]`);
-                        await window.saveQuestionToDB(questionText, selectedAnswersFromPage, isCorrectFromPage);
-                        createdCount++;
+                        if (!matchFound) {
+                            window.sendLogToBackground(`❓ Новая комбинация: [${selectedAnswersFromPage.join('; ')}]`);
+                            await window.saveQuestionToDB(questionText, selectedAnswersFromPage, isCorrectFromPage);
+                            createdCount++;
+                        }
+                        processedCount++;
+                    } catch (e) {
+                        window.sendLogToBackground("⚠️ Ошибка: ", e);
                     }
-                    processedCount++;
-                } catch (e) {
-                    window.sendLogToBackground("⚠️ Ошибка обработки вопроса:", e);
+                });
+
+                await Promise.all(promises);
+                
+                // ✅ ПАУЗА 3 СЕКУНДЫ МЕЖДУ ПАКЕТАМИ
+                if (batchIndex < batches.length - 1) {
+                    window.sendLogToBackground(`⏳ Пауза 3 секунды перед следующим пакетом...`);
+                    await new Promise(resolve => setTimeout(resolve, 3000));
                 }
-            });
-
-            await Promise.all(promises);
+            }
 
             window.sendLogToBackground(`📊 Итого: Обработано=${processedCount}, Обновлено=${updatedCount}, Создано=${createdCount}`);
             window.tryFinishTestFlow();

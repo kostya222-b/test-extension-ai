@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ✅ CORS настройка
+// ✅ УВЕЛИЧЕН ТАЙМАУТ ДЛЯ CORS
 app.use(cors({
     origin: function(origin, callback) {
         if (!origin) return callback(null, true);
@@ -19,13 +19,14 @@ app.use(cors({
         }
         return callback(new Error('Not allowed by CORS'));
     },
-    methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
+    methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE', 'PATCH'],
     allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization'],
-    credentials: false
+    credentials: false,
+    maxAge: 86400
 }));
 
 app.options('*', cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 // ✅ Supabase клиент
 const supabase = createClient(
@@ -49,18 +50,18 @@ app.get('/api/answers', async (req, res) => {
     try {
         const { question } = req.query;
         if (!question) return res.status(400).json({ error: 'Вопрос не указан' });
-        
+
         const questionHash = crypto.createHash('md5').update(question.trim()).digest('hex');
-        
+
         const { data: records, error } = await supabase
             .from('questions')
             .select('*')
             .eq('question_hash', questionHash)
             .order('votes', { ascending: false })
             .limit(10);
-        
+
         if (error) throw error;
-        
+
         res.json({
             success: true,
             count: records?.length || 0,
@@ -78,21 +79,21 @@ app.get('/api/answers', async (req, res) => {
 app.post('/api/answers', validateApiKey, async (req, res) => {
     try {
         const { question, answers, isCorrect } = req.body;
-        
+
         if (!question || !answers || !Array.isArray(answers)) {
             return res.status(400).json({ error: 'Вопрос и ответы обязательны' });
         }
-        
+
         const questionHash = crypto.createHash('md5').update(question.trim()).digest('hex');
         const normalizedAnswers = answers.map(a => a.trim()).sort();
-        
+
         const { data: existing } = await supabase
             .from('questions')
             .select('*')
             .eq('question_hash', questionHash)
             .eq('answers', `{${normalizedAnswers.join(',')}}`)
             .maybeSingle();
-        
+
         if (existing) {
             if (isCorrect !== null && existing.is_correct !== isCorrect) {
                 const { data: updated } = await supabase
@@ -105,7 +106,7 @@ app.post('/api/answers', validateApiKey, async (req, res) => {
                     .eq('id', existing.id)
                     .select()
                     .single();
-                
+
                 res.json({ success: true, message: 'Обновлено', data: updated });
             } else {
                 res.json({ success: true, message: 'Уже существует', data: existing });
@@ -124,11 +125,44 @@ app.post('/api/answers', validateApiKey, async (req, res) => {
                 })
                 .select()
                 .single();
-            
+
             res.json({ success: true, message: 'Создано', data: created });
         }
     } catch (error) {
         console.error('Ошибка сохранения:', error);
+        res.status(500).json({ error: 'Ошибка сервера', message: error.message });
+    }
+});
+
+// =====================================================================
+// === PATCH: Обновление статуса ответа ===
+// =====================================================================
+app.patch('/api/answers/:id', validateApiKey, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { isCorrect, votes } = req.body;
+
+        if (isCorrect === undefined && votes === undefined) {
+            return res.status(400).json({ error: 'Необходимо указать isCorrect или votes' });
+        }
+
+        const updateData = {};
+        if (isCorrect !== undefined) updateData.is_correct = isCorrect;
+        if (votes !== undefined) updateData.votes = votes;
+        updateData.updated_at = new Date().toISOString();
+
+        const { data: updated, error } = await supabase
+            .from('questions')
+            .update(updateData)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({ success: true, message: 'Обновлено', data: updated });
+    } catch (error) {
+        console.error('Ошибка обновления:', error);
         res.status(500).json({ error: 'Ошибка сервера', message: error.message });
     }
 });
@@ -145,4 +179,6 @@ app.get('/health', (req, res) => {
 // =====================================================================
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Сервер запущен на порту ${PORT}`);
+    console.log(`📍 URL: https://test-extension-ai.onrender.com`);
+    console.log(`🔗 Health: https://test-extension-ai.onrender.com/health`);
 });
