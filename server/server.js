@@ -2,24 +2,31 @@
 require('dotenv').config();
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const cors = require('cors');
+const cors = require('cors');  // ← ТОЛЬКО ОДИН РАЗ!
 const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ✅ CORS настройка для расширения и сайта
+// ✅ CORS настройка — ИСПРАВЛЕННАЯ ВЕРСИЯ для Chrome Extension
 app.use(cors({
     origin: function(origin, callback) {
         // Разрешаем:
-        // - Запросы без origin (расширения, curl, etc.)
-        // - Наш сайт обучения
-        // - Любые chrome-extension:// (для разработки)
-        if (!origin || 
-            origin === 'https://edu.rosminzdrav.ru' ||
-            origin?.startsWith('chrome-extension://')) {
+        // 1. Запросы БЕЗ origin (расширения, curl, Postman)
+        if (!origin) return callback(null, true);
+        
+        // 2. Наш сайт обучения
+        if (origin === 'https://iomqt-vo.edu.rosminzdrav.ru') return callback(null, true);
+        
+        // 3. Любые chrome-extension:// (для разработки)
+        if (origin.startsWith('chrome-extension://')) return callback(null, true);
+        
+        // 4. localhost для локальных тестов
+        if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
             return callback(null, true);
         }
+        
+        // Всё остальное — блокируем
         return callback(new Error('Not allowed by CORS'));
     },
     methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
@@ -27,7 +34,7 @@ app.use(cors({
     credentials: false
 }));
 
-// ✅ Обработка preflight запросов
+// ✅ Обработка preflight запросов (OPTIONS)
 app.options('*', cors());
 
 app.use(express.json());
