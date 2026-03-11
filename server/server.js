@@ -49,15 +49,23 @@ app.get('/api/answers', async (req, res) => {
     try {
         const { question } = req.query;
         if (!question) return res.status(400).json({ error: 'Вопрос не указан' });
+        
         const questionHash = crypto.createHash('md5').update(question.trim()).digest('hex');
+        
         const { data: records, error } = await supabase
             .from('questions')
             .select('*')
             .eq('question_hash', questionHash)
             .order('votes', { ascending: false })
             .limit(10);
+        
         if (error) throw error;
-        res.json({ success: true, count: records?.length || 0, data: records || [] });
+        
+        res.json({
+            success: true,
+            count: records?.length || 0,
+            data: records || []
+        });
     } catch (error) {
         console.error('Ошибка поиска:', error);
         res.status(500).json({ error: 'Ошибка сервера', message: error.message });
@@ -70,17 +78,21 @@ app.get('/api/answers', async (req, res) => {
 app.post('/api/answers', validateApiKey, async (req, res) => {
     try {
         const { question, answers, isCorrect } = req.body;
+        
         if (!question || !answers || !Array.isArray(answers)) {
             return res.status(400).json({ error: 'Вопрос и ответы обязательны' });
         }
+        
         const questionHash = crypto.createHash('md5').update(question.trim()).digest('hex');
         const normalizedAnswers = answers.map(a => a.trim()).sort();
+        
         const { data: existing } = await supabase
             .from('questions')
             .select('*')
             .eq('question_hash', questionHash)
             .eq('answers', `{${normalizedAnswers.join(',')}}`)
             .maybeSingle();
+        
         if (existing) {
             if (isCorrect !== null && existing.is_correct !== isCorrect) {
                 const { data: updated } = await supabase
@@ -93,6 +105,7 @@ app.post('/api/answers', validateApiKey, async (req, res) => {
                     .eq('id', existing.id)
                     .select()
                     .single();
+                
                 res.json({ success: true, message: 'Обновлено', data: updated });
             } else {
                 res.json({ success: true, message: 'Уже существует', data: existing });
@@ -111,6 +124,7 @@ app.post('/api/answers', validateApiKey, async (req, res) => {
                 })
                 .select()
                 .single();
+            
             res.json({ success: true, message: 'Создано', data: created });
         }
     } catch (error) {
@@ -126,20 +140,25 @@ app.patch('/api/answers/:id', validateApiKey, async (req, res) => {
     try {
         const { id } = req.params;
         const { isCorrect, votes } = req.body;
+        
         if (isCorrect === undefined && votes === undefined) {
             return res.status(400).json({ error: 'Необходимо указать isCorrect или votes' });
         }
+        
         const updateData = {};
         if (isCorrect !== undefined) updateData.is_correct = isCorrect;
         if (votes !== undefined) updateData.votes = votes;
         updateData.updated_at = new Date().toISOString();
+        
         const { data: updated, error } = await supabase
             .from('questions')
             .update(updateData)
             .eq('id', id)
             .select()
             .single();
+        
         if (error) throw error;
+        
         res.json({ success: true, message: 'Обновлено', data: updated });
     } catch (error) {
         console.error('Ошибка обновления:', error);

@@ -13,7 +13,7 @@ const CONFIG = {
 // === ФУНКЦИИ ДЛЯ РАБОТЫ С RENDER BACKEND ===
 // =====================================================================
 
-// ✅ Поиск ответов через Render сервер (ВОЗВРАЩАЕТ ID!)
+// ✅ Поиск ответов через Render сервер — ВОЗВРАЩАЕТ ID!
 window.fetchAnswersFromServer = async function(question) {
     try {
         const response = await fetch(`${CONFIG.backendUrl}/api/answers?question=${encodeURIComponent(question)}`, {
@@ -27,23 +27,21 @@ window.fetchAnswersFromServer = async function(question) {
         const result = await response.json();
         
         if (result.success && result.data?.length > 0) {
-            // Сначала ищем запись с is_correct = true
             const correctRecord = result.data.find(r => r.is_correct === true);
             if (correctRecord?.answers) {
                 window.sendLogToBackground?.(`✅ Найдено на сервере: ${correctRecord.answers.length} ответов (ID: ${correctRecord.id})`);
                 return {
                     answers: correctRecord.answers,
-                    id: correctRecord.id,  // ← ВОЗВРАЩАЕМ ID!
+                    id: correctRecord.id,
                     is_correct: correctRecord.is_correct
                 };
             }
-            // Если нет правильных — возвращаем первую запись
             const topRecord = result.data[0];
             if (topRecord?.answers) {
                 window.sendLogToBackground?.(`⚠️ Найдено на сервере (статус: ${topRecord.is_correct}, ID: ${topRecord.id})`);
                 return {
                     answers: topRecord.answers,
-                    id: topRecord.id,  // ← ВОЗВРАЩАЕМ ID!
+                    id: topRecord.id,
                     is_correct: topRecord.is_correct
                 };
             }
@@ -62,7 +60,7 @@ window.saveAnswerToServer = async function(question, answers, isCorrect = null) 
         return false;
     }
     if (!answers?.length) return false;
-
+    
     try {
         const response = await fetch(`${CONFIG.backendUrl}/api/answers`, {
             method: 'POST',
@@ -90,8 +88,8 @@ window.saveAnswerToServer = async function(question, answers, isCorrect = null) 
     }
 };
 
-// ✅ Обновление статуса ответа через Render сервер
-window.updateAnswerStatusOnServer = async function(id, isCorrect) {
+// ✅ Обновление статуса ответа через Render сервер (PATCH)
+window.updateAnswerStatus = async function(id, isCorrect) {
     if (!id) {
         window.sendLogToBackground?.(`⚠️ Нет ID для обновления`);
         return false;
@@ -107,11 +105,13 @@ window.updateAnswerStatusOnServer = async function(id, isCorrect) {
             signal: AbortSignal.timeout(CONFIG.timeout)
         });
 
-        if (!response.ok) throw new Error(`Status ${response.status}`);
+        if (!response.ok) {
+            throw new Error(`Status ${response.status}`);
+        }
 
         const result = await response.json();
         if (result.success) {
-            window.sendLogToBackground?.(`✅ Обновлено на сервере #${id}`);
+            window.sendLogToBackground?.(`✅ Успешно обновлено #${id}`);
             return true;
         }
         return false;
@@ -125,7 +125,7 @@ window.updateAnswerStatusOnServer = async function(id, isCorrect) {
 window.CONFIG = CONFIG;
 window.fetchAnswersFromServer = fetchAnswersFromServer;
 window.saveAnswerToServer = saveAnswerToServer;
-window.updateAnswerStatusOnServer = updateAnswerStatusOnServer;
+window.updateAnswerStatus = updateAnswerStatus;
 
 // ✅ Проверка подключения
 (async function testConnection() {
