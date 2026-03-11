@@ -8,15 +8,36 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ✅ CORS настройка
+// ✅ CORS настройка — РАЗРЕШАЕМ ВСЕ ПОДДОМЕНЫ edu.rosminzdrav.ru
 app.use(cors({
     origin: function(origin, callback) {
+        // 1. Запросы без origin (расширения, curl)
         if (!origin) return callback(null, true);
-        if (origin === 'https://iomqt-vo.edu.rosminzdrav.ru') return callback(null, true);
+        
+        // 2. Наш сайт обучения (все поддомены)
+        if (origin.includes('edu.rosminzdrav.ru')) return callback(null, true);
+
+        // 2. Наш сайт обучения (все поддомены)
+        if (origin.includes('iomqt-vo.edu.rosminzdrav.ru')) return callback(null, true);
+
+        // 2. Наш сайт обучения (все поддомены)
+        if (origin.includes('iomqt-spo.edu.rosminzdrav.ru')) return callback(null, true);
+
+        // 2. Наш сайт обучения (все поддомены)
+        if (origin.includes('iomqt-nmd.edu.rosminzdrav.ru')) return callback(null, true);
+        
+        // 3. chrome-extension://
         if (origin.startsWith('chrome-extension://')) return callback(null, true);
+        
+        // 4. localhost для разработки
         if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
             return callback(null, true);
         }
+        
+        // 5. Render preview URLs
+        if (origin.includes('onrender.com')) return callback(null, true);
+        
+        // Всё остальное — блокируем
         return callback(new Error('Not allowed by CORS'));
     },
     methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE', 'PATCH'],
@@ -24,7 +45,9 @@ app.use(cors({
     credentials: false
 }));
 
+// ✅ Preflight запросы
 app.options('*', cors());
+
 app.use(express.json());
 
 // ✅ Supabase клиент
@@ -52,14 +75,12 @@ app.get('/api/answers', async (req, res) => {
         
         const questionHash = crypto.createHash('md5').update(question.trim()).digest('hex');
         
-        // ✅ Увеличиваем лимит до 50 записей чтобы получить все комбинации
         const { data: records, error } = await supabase
             .from('questions')
             .select('*')
             .eq('question_hash', questionHash)
-            .order('is_correct', { ascending: true })  // Сначала неверные, потом верные
             .order('votes', { ascending: false })
-            .limit(50);  // ← Увеличили с 10 до 50
+            .limit(50);  // ✅ Увеличили лимит
         
         if (error) throw error;
         
@@ -69,7 +90,8 @@ app.get('/api/answers', async (req, res) => {
             data: records || []
         });
     } catch (error) {
-        console.error('Ошибка поиска:', error);
+        // ✅ Логируем на сервере, не в браузере
+        console.error('GET error:', error);
         res.status(500).json({ error: 'Ошибка сервера', message: error.message });
     }
 });
@@ -130,7 +152,7 @@ app.post('/api/answers', validateApiKey, async (req, res) => {
             res.json({ success: true, message: 'Создано', data: created });
         }
     } catch (error) {
-        console.error('Ошибка сохранения:', error);
+        console.error('POST error:', error);
         res.status(500).json({ error: 'Ошибка сервера', message: error.message });
     }
 });
@@ -163,7 +185,7 @@ app.patch('/api/answers/:id', validateApiKey, async (req, res) => {
         
         res.json({ success: true, message: 'Обновлено', data: updated });
     } catch (error) {
-        console.error('Ошибка обновления:', error);
+        console.error('PATCH error:', error);
         res.status(500).json({ error: 'Ошибка сервера', message: error.message });
     }
 });
@@ -179,5 +201,6 @@ app.get('/health', (req, res) => {
 // === Старт сервера ===
 // =====================================================================
 app.listen(PORT, '0.0.0.0', () => {
+    // ✅ Это серверный лог — он не попадёт в браузер
     console.log(`🚀 Сервер запущен на порту ${PORT}`);
 });

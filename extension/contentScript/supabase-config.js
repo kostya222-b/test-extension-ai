@@ -2,6 +2,7 @@
 // === КОНФИГУРАЦИЯ (Render Backend) ===
 // =====================================================================
 const CONFIG = {
+    // ✅ УБРАНЫ ПРОБЕЛЫ В КОНЦЕ!
     backendUrl: 'https://test-extension-ai.onrender.com',
     supabaseUrl: 'https://ofxbtognakyiugrijbat.supabase.co',
     supabaseAnonKey: 'sb_publishable_9hwkldYTVXAbLJuQ9IRzxw_UD4Uls6B',
@@ -27,8 +28,9 @@ window.fetchAllAnswersFromServer = async function(question) {
         const result = await response.json();
         
         if (result.success && result.data?.length > 0) {
+            // ✅ Используем sendLogToBackground вместо console.log
             window.sendLogToBackground?.(`✅ Найдено записей на сервере: ${result.data.length}`);
-            return result.data;  // ← ВОЗВРАЩАЕМ ВСЕ ЗАПИСИ!
+            return result.data;
         }
         return [];
     } catch (error) {
@@ -42,7 +44,6 @@ window.fetchAnswersFromServer = async function(question) {
     const allRecords = await window.fetchAllAnswersFromServer(question);
     
     if (allRecords.length > 0) {
-        // Сначала ищем запись с is_correct = true
         const correctRecord = allRecords.find(r => r.is_correct === true);
         if (correctRecord?.answers) {
             window.sendLogToBackground?.(`✅ Найдено на сервере: ${correctRecord.answers.length} ответов (ID: ${correctRecord.id})`);
@@ -52,7 +53,6 @@ window.fetchAnswersFromServer = async function(question) {
                 is_correct: correctRecord.is_correct
             };
         }
-        // Если нет правильных — возвращаем первую запись
         const topRecord = allRecords[0];
         if (topRecord?.answers) {
             window.sendLogToBackground?.(`⚠️ Найдено на сервере (статус: ${topRecord.is_correct}, ID: ${topRecord.id})`);
@@ -141,7 +141,7 @@ window.fetchAnswersFromServer = fetchAnswersFromServer;
 window.saveAnswerToServer = saveAnswerToServer;
 window.updateAnswerStatus = updateAnswerStatus;
 
-// ✅ Проверка подключения
+// ✅ Проверка подключения — БЕЗ console.log!
 (async function testConnection() {
     try {
         const response = await fetch(`${CONFIG.backendUrl}/health`);

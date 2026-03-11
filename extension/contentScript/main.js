@@ -1,7 +1,6 @@
 // =====================================================================
 // === ИНИЦИАЛИЗАЦИЯ ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ ===
 // =====================================================================
-console.log('🔧 contentScript/main.js загружен');
 if (chrome.runtime && chrome.runtime.sendMessage) {
     chrome.runtime.sendMessage({ action: "log", args: ["✅ Контент-скрипт инициализирован"] }).catch(() => {});
 }
@@ -57,6 +56,19 @@ function getRandomCoordinates(element) {
         x: Math.floor(Math.random() * (box.right - box.left) + box.left),
         y: Math.floor(Math.random() * (box.bottom - box.top) + box.top)
     };
+}
+
+async function simulateClick(element) {
+    if (!element) return;
+    element.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    await wait(300);
+    const coords = getRandomCoordinates(element);
+    element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window, clientX: coords.x, clientY: coords.y }));
+    await wait(Math.random() * 300 + 100);
+    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: coords.x, clientY: coords.y, buttons: 1 }));
+    await wait(Math.random() * 150 + 50);
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: coords.x, clientY: coords.y, buttons: 0 }));
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: coords.x, clientY: coords.y, buttons: 0 }));
 }
 
 // =====================================================================
@@ -139,23 +151,7 @@ class GlobalSelectorMutationObserver {
 }
 
 // =====================================================================
-// === ЭМУЛЯЦИЯ КЛИКОВ ===
-// =====================================================================
-async function simulateClick(element) {
-    if (!element) return;
-    element.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    await wait(300);
-    const coords = getRandomCoordinates(element);
-    element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window, clientX: coords.x, clientY: coords.y }));
-    await wait(Math.random() * 300 + 100);
-    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: coords.x, clientY: coords.y, buttons: 1 }));
-    await wait(Math.random() * 150 + 50);
-    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: coords.x, clientY: coords.y, buttons: 0 }));
-    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: coords.x, clientY: coords.y, buttons: 0 }));
-}
-
-// =====================================================================
-// === БАЗА ДАННЫХ (С ПРОВЕРКОЙ ДУБЛЕЙ) ===
+// === БАЗА ДАННЫХ ===
 // =====================================================================
 window.initDatabase = async function() {
     if (window.db) return window.db;
@@ -199,7 +195,7 @@ window.normalizeText = function(text) {
     return text?.toLowerCase().trim().replace(/\s+/g, ' ') || '';
 };
 
-// ✅ СОХРАНЕНИЕ: Supabase + локальный кэш (ТОЛЬКО auto_ai)
+// ✅ СОХРАНЕНИЕ: Supabase + локальный кэш
 window.saveQuestionToDB = async function(question, selectedAnswers, isCorrect = null) {
     if (isCorrect === true && (!selectedAnswers || !Array.isArray(selectedAnswers) || selectedAnswers.length === 0)) {
         window.sendLogToBackground("⚠️ Пропущено сохранение: верный ответ без вариантов");
@@ -258,14 +254,14 @@ window.saveQuestionToDB = async function(question, selectedAnswers, isCorrect = 
     }
 };
 
-// ✅ ПОИСК: Supabase → локальный кэш
+// ✅ ПОИСК: Supabase → локальный кэш (ИСПРАВЛЕНО - возвращает ВСЕ записи)
 window.findQuestionInDB = async function(question) {
-    // 1. Сначала пробуем Supabase — ПОЛУЧАЕМ ВСЕ ЗАПИСИ
+    // 1. Сначала пробуем Supabase - ПОЛУЧАЕМ ВСЕ ЗАПИСИ
     try {
         const allRecords = await window.fetchAllAnswersFromServer(question);
         
         if (allRecords && allRecords.length > 0) {
-            // ✅ Ищем правильную запись
+            // Ищем правильную запись
             const correctRecord = allRecords.find(r => r.is_correct === true);
             if (correctRecord?.answers) {
                 window.sendLogToBackground?.(`✅ Найдено правильных записей: 1`);
@@ -280,7 +276,7 @@ window.findQuestionInDB = async function(question) {
                 }];
             }
             
-            // ✅ Если нет правильных — возвращаем ВСЕ записи для сбора неверных комбинаций
+            // Если нет правильных - возвращаем ВСЕ записи для сбора неверных комбинаций
             window.sendLogToBackground?.(`⚠️ Найдено записей на сервере: ${allRecords.length} (все неверные)`);
             return allRecords.map(record => ({
                 questionHash: window.getQuestionHash(question),
@@ -296,7 +292,7 @@ window.findQuestionInDB = async function(question) {
         window.sendLogToBackground("⚠️ Supabase недоступен, используем локальную БД");
     }
     
-    // 2. Если Supabase не ответил — локальная база
+    // 2. Если Supabase не ответил - локальная база
     try {
         const db = await window.initDatabase();
         return new Promise((resolve) => {
@@ -341,7 +337,7 @@ window.exportDatabase = async function() {
 };
 
 // =====================================================================
-// === УМНАЯ НАВИГАЦИЯ ===
+// === НАВИГАЦИЯ ===
 // =====================================================================
 window.detectPageType = function() {
     if (document.querySelector('.questionList') || document.querySelector('lib-quiz-page .questionList')) {
@@ -362,9 +358,6 @@ window.detectPageType = function() {
     return 'unknown';
 };
 
-// =====================================================================
-// === ОБНАРУЖЕНИЕ ОШИБОК НА СТРАНИЦЕ ===
-// =====================================================================
 window.detectPageError = function() {
     const errorPatterns = [
         /500\s*(Internal\sServer\sError)/i,
@@ -401,9 +394,6 @@ window.detectPageError = function() {
     return false;
 };
 
-// =====================================================================
-// === АВТО-ПЕРЕЗАГРУЗКА ПРИ ОШИБКАХ ===
-// =====================================================================
 window.handlePageError = async function() {
     if (window.currentMode !== 'auto_ai') {
         window.sendLogToBackground("❌ Авто-перезагрузка только для режима auto_ai");
@@ -457,9 +447,6 @@ window.handlePageError = async function() {
     return true;
 };
 
-// =====================================================================
-// === СБРОС СЧЕТЧИКА ПЕРЕЗАГРУЗОК ===
-// =====================================================================
 window.resetReloadCounter = function() {
     window.currentReloadCount = 0;
     window.lastErrorTime = 0;
@@ -472,7 +459,7 @@ window.resetReloadCounter = function() {
 };
 
 // =====================================================================
-// === ОБРАБОТКА СТРАНИЦЫ ВАРИАНТОВ ===
+// === ОБРАБОТКА ВАРИАНТОВ ===
 // =====================================================================
 window.handleTestVariantsPage = async function() {
     if (window.isStopped || window.currentMode !== 'auto_ai') {
@@ -578,9 +565,6 @@ window.handleTestVariantsPage = async function() {
     }
 };
 
-// =====================================================================
-// === ЗАКРЫТИЕ МОДАЛЬНОГО ОКНА РЕЗУЛЬТАТОВ ===
-// =====================================================================
 window.closeResultsModal = async function() {
     if (window.isStopped || window.currentMode !== 'auto_ai') {
         window.sendLogToBackground("⏹️ closeResultsModal: остановлено");
@@ -863,7 +847,7 @@ window.autoStartTestFlow = async function() {
 };
 
 // =====================================================================
-// === ПОДТВЕРЖДЕНИЕ ДИАЛОГОВОГО ОКНА ===
+// === ДИАЛОГОВОЕ ОКНО ===
 // =====================================================================
 window.clickConfirmDialogButton = async function() {
     window.sendLogToBackground("⏳ Ожидание диалогового окна подтверждения...");
@@ -1028,9 +1012,6 @@ window.stopScript = function(forceUnlock = false, forceStop = false) {
     window.sendLogToBackground(`✅ Скрипт остановлен. Блокировка: ${window.isLocked}`);
 };
 
-// =====================================================================
-// === ЗАДЕРЖКИ ===
-// =====================================================================
 window.getRandomDelaySeconds = function(min, max) {
     if (min > max) return min;
     return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -1173,7 +1154,7 @@ window.executeModeLogic = async function() {
 };
 
 // =====================================================================
-// === АВТОПОДБОР С ИИ ===
+// === АВТОПОДБОР С ИИ (ИСПРАВЛЕНО - ВСЕ НЕВЕРНЫЕ КОМБИНАЦИИ) ===
 // =====================================================================
 window.executeAutoAIModeLogic = async function() {
     if (window.isExecuting || window.isStopped) {
@@ -1246,7 +1227,9 @@ window.executeAutoAIModeLogic = async function() {
 
         if (!aiAnswers || aiAnswers.length === 0) {
             let incorrectCombinations = [];
+            
             if (dbRecords.length > 0) {
+                // ✅ СОБИРАЕМ ВСЕ НЕВЕРНЫЕ КОМБИНАЦИИ ИЗ ВСЕХ ЗАПИСЕЙ
                 incorrectCombinations = dbRecords
                     .filter(record =>
                         record.isCorrect === false &&
@@ -1255,11 +1238,13 @@ window.executeAutoAIModeLogic = async function() {
                         record.selectedAnswers.length > 0
                     )
                     .map(record => {
+                        // ✅ СОРТИРУЕМ ответы чтобы [A,D,B] и [D,B,A] считались одной комбинацией
                         return [...record.selectedAnswers].sort((a, b) =>
                             window.normalizeText(a).localeCompare(window.normalizeText(b))
                         );
                     });
 
+                // ✅ УДАЛЯЕМ ДУБЛИКАТЫ комбинаций
                 const uniqueIncorrect = [];
                 const seen = new Set();
                 for (const comb of incorrectCombinations) {
@@ -1454,11 +1439,14 @@ window.executeAutoAIModeLogic = async function() {
     }
 };
 
-// ✅ ПРОВЕРКА РЕЗУЛЬТАТОВ ТЕСТА И ОЦЕНКИ (ИСПРАВЛЕННАЯ)
+// =====================================================================
+// === ПРОВЕРКА РЕЗУЛЬТАТОВ (ИСПРАВЛЕНО - ОБНОВЛЕНИЕ НА СЕРВЕРЕ) ===
+// =====================================================================
 window.checkTestResults = async function() {
     window.sendLogToBackground("📊 Проверка результатов и оценки...");
     let attempts = 0;
     const maxAttempts = 30;
+
     if (window.checkResultsInterval) {
         clearInterval(window.checkResultsInterval);
         window.checkResultsInterval = null;
@@ -1530,23 +1518,22 @@ window.checkTestResults = async function() {
                             normalizedDb.every((val, i) => val === normalizedPage[i])) {
 
                             matchFound = true;
-                            
-                            // ✅ ПРОВЕРКА: ЕСТЬ ЛИ ID
+
                             if (!record.id) {
                                 window.sendLogToBackground(`⚠️ У записи нет ID, пропускаем обновление: ${questionText.substring(0, 50)}...`);
                                 break;
                             }
-                            
+
                             if (record.isCorrect !== isCorrectFromPage) {
                                 window.sendLogToBackground(`🔄 Обновление #${record.id}: ${record.isCorrect} → ${isCorrectFromPage}`);
-                                
+
                                 // ✅ Обновляем локально
                                 const transaction = window.db.transaction(['questions'], 'readwrite');
                                 const store = transaction.objectStore('questions');
                                 record.isCorrect = isCorrectFromPage;
                                 store.put(record);
                                 updatedCount++;
-                                
+
                                 // ✅ ОТПРАВЛЯЕМ PATCH ЗАПРОС НА СЕРВЕР
                                 try {
                                     const success = await window.updateAnswerStatus(record.id, isCorrectFromPage);
@@ -1645,7 +1632,7 @@ window.tryFinishTestFlow = async function() {
                 chrome.storage.local.set({ shouldCloseResultsModal: true });
                 await window.simulateClick(returnButton);
             } else {
-                window.sendLogToBackground("⚠️ Кнопка возврата не найдена, пытаемся найти любую кнопку возврата");
+                window.sendLogToBackground("⚠️ Кнопка возврата не найдена");
                 const anyReturnBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Вернуться'));
                 if (anyReturnBtn) {
                     await window.simulateClick(anyReturnBtn);
@@ -1655,7 +1642,7 @@ window.tryFinishTestFlow = async function() {
             }
         }
     } else {
-        window.sendLogToBackground("⚠️ Не удалось автоматически определить оценку. Пробуем вернуться вручную или стоп.");
+        window.sendLogToBackground("⚠️ Не удалось автоматически определить оценку");
         const returnButton = document.querySelector('button.quiz-buttons-primary, .v-button-blue-button');
         if (returnButton && returnButton.textContent.includes('Вернуться')) {
             window.isReturningToLearning = true;
@@ -1914,7 +1901,7 @@ window.beforeUnloadHandler = function() {
 };
 
 // =====================================================================
-// === УПРАВЛЕНИЕ СОСТОЯНИЕМ МОДАЛЬНОГО ОКНА ===
+// === УПРАВЛЕНИЕ МОДАЛЬНЫМ ОКНОМ ===
 // =====================================================================
 window.updateModalButtonState = function(isLocked) {
     const modalHost = document.getElementById('extensionModal');
