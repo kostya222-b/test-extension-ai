@@ -260,20 +260,37 @@ window.saveQuestionToDB = async function(question, selectedAnswers, isCorrect = 
 
 // ✅ ПОИСК: Supabase → локальный кэш
 window.findQuestionInDB = async function(question) {
-    // 1. Сначала пробуем Supabase
+    // 1. Сначала пробуем Supabase — ПОЛУЧАЕМ ВСЕ ЗАПИСИ
     try {
-        const supabaseResult = await window.fetchAnswersFromServer(question);
-        // ✅ ПРОВЕРЯЕМ ЧТО ЭТО ОБЪЕКТ С answers, id, is_correct
-        if (supabaseResult && supabaseResult.answers && Array.isArray(supabaseResult.answers) && supabaseResult.answers.length > 0) {
-            return [{
+        const allRecords = await window.fetchAllAnswersFromServer(question);
+        
+        if (allRecords && allRecords.length > 0) {
+            // ✅ Ищем правильную запись
+            const correctRecord = allRecords.find(r => r.is_correct === true);
+            if (correctRecord?.answers) {
+                window.sendLogToBackground?.(`✅ Найдено правильных записей: 1`);
+                return [{
+                    questionHash: window.getQuestionHash(question),
+                    question,
+                    selectedAnswers: correctRecord.answers,
+                    isCorrect: true,
+                    id: correctRecord.id,
+                    timestamp: new Date().toISOString(),
+                    source: 'supabase'
+                }];
+            }
+            
+            // ✅ Если нет правильных — возвращаем ВСЕ записи для сбора неверных комбинаций
+            window.sendLogToBackground?.(`⚠️ Найдено записей на сервере: ${allRecords.length} (все неверные)`);
+            return allRecords.map(record => ({
                 questionHash: window.getQuestionHash(question),
                 question,
-                selectedAnswers: supabaseResult.answers,
-                isCorrect: supabaseResult.is_correct,
-                id: supabaseResult.id,  // ✅ СОХРАНЯЕМ ID!
-                timestamp: new Date().toISOString(),
+                selectedAnswers: record.answers,
+                isCorrect: record.is_correct,
+                id: record.id,
+                timestamp: record.created_at || new Date().toISOString(),
                 source: 'supabase'
-            }];
+            }));
         }
     } catch (e) {
         window.sendLogToBackground("⚠️ Supabase недоступен, используем локальную БД");

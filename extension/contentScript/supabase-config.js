@@ -13,8 +13,8 @@ const CONFIG = {
 // === ФУНКЦИИ ДЛЯ РАБОТЫ С RENDER BACKEND ===
 // =====================================================================
 
-// ✅ Поиск ответов через Render сервер — ВОЗВРАЩАЕТ ID!
-window.fetchAnswersFromServer = async function(question) {
+// ✅ Поиск ВСЕХ записей для вопроса через Render сервер
+window.fetchAllAnswersFromServer = async function(question) {
     try {
         const response = await fetch(`${CONFIG.backendUrl}/api/answers?question=${encodeURIComponent(question)}`, {
             method: 'GET',
@@ -27,30 +27,43 @@ window.fetchAnswersFromServer = async function(question) {
         const result = await response.json();
         
         if (result.success && result.data?.length > 0) {
-            const correctRecord = result.data.find(r => r.is_correct === true);
-            if (correctRecord?.answers) {
-                window.sendLogToBackground?.(`✅ Найдено на сервере: ${correctRecord.answers.length} ответов (ID: ${correctRecord.id})`);
-                return {
-                    answers: correctRecord.answers,
-                    id: correctRecord.id,
-                    is_correct: correctRecord.is_correct
-                };
-            }
-            const topRecord = result.data[0];
-            if (topRecord?.answers) {
-                window.sendLogToBackground?.(`⚠️ Найдено на сервере (статус: ${topRecord.is_correct}, ID: ${topRecord.id})`);
-                return {
-                    answers: topRecord.answers,
-                    id: topRecord.id,
-                    is_correct: topRecord.is_correct
-                };
-            }
+            window.sendLogToBackground?.(`✅ Найдено записей на сервере: ${result.data.length}`);
+            return result.data;  // ← ВОЗВРАЩАЕМ ВСЕ ЗАПИСИ!
         }
-        return null;
+        return [];
     } catch (error) {
         window.sendLogToBackground?.(`⚠️ Ошибка поиска на сервере: ${error.message}`);
-        return null;
+        return [];
     }
+};
+
+// ✅ Поиск ответов (для обратной совместимости)
+window.fetchAnswersFromServer = async function(question) {
+    const allRecords = await window.fetchAllAnswersFromServer(question);
+    
+    if (allRecords.length > 0) {
+        // Сначала ищем запись с is_correct = true
+        const correctRecord = allRecords.find(r => r.is_correct === true);
+        if (correctRecord?.answers) {
+            window.sendLogToBackground?.(`✅ Найдено на сервере: ${correctRecord.answers.length} ответов (ID: ${correctRecord.id})`);
+            return {
+                answers: correctRecord.answers,
+                id: correctRecord.id,
+                is_correct: correctRecord.is_correct
+            };
+        }
+        // Если нет правильных — возвращаем первую запись
+        const topRecord = allRecords[0];
+        if (topRecord?.answers) {
+            window.sendLogToBackground?.(`⚠️ Найдено на сервере (статус: ${topRecord.is_correct}, ID: ${topRecord.id})`);
+            return {
+                answers: topRecord.answers,
+                id: topRecord.id,
+                is_correct: topRecord.is_correct
+            };
+        }
+    }
+    return null;
 };
 
 // ✅ Сохранение ответа через Render сервер
@@ -123,6 +136,7 @@ window.updateAnswerStatus = async function(id, isCorrect) {
 
 // ✅ Экспорт в глобальную область
 window.CONFIG = CONFIG;
+window.fetchAllAnswersFromServer = fetchAllAnswersFromServer;
 window.fetchAnswersFromServer = fetchAnswersFromServer;
 window.saveAnswerToServer = saveAnswerToServer;
 window.updateAnswerStatus = updateAnswerStatus;

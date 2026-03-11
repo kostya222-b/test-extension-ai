@@ -52,12 +52,14 @@ app.get('/api/answers', async (req, res) => {
         
         const questionHash = crypto.createHash('md5').update(question.trim()).digest('hex');
         
+        // ✅ Увеличиваем лимит до 50 записей чтобы получить все комбинации
         const { data: records, error } = await supabase
             .from('questions')
             .select('*')
             .eq('question_hash', questionHash)
+            .order('is_correct', { ascending: true })  // Сначала неверные, потом верные
             .order('votes', { ascending: false })
-            .limit(10);
+            .limit(50);  // ← Увеличили с 10 до 50
         
         if (error) throw error;
         
