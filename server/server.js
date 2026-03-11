@@ -25,6 +25,9 @@ app.use(cors({
 
         // 2. Наш сайт обучения (все поддомены)
         if (origin.includes('iomqt-nmd.edu.rosminzdrav.ru')) return callback(null, true);
+
+        // 2. Наш сайт обучения (все поддомены)
+        if (origin.includes('*edu.rosminzdrav.ru')) return callback(null, true);
         
         // 3. chrome-extension://
         if (origin.startsWith('chrome-extension://')) return callback(null, true);
